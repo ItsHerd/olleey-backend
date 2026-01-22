@@ -1,0 +1,16 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-dotenv==1.0.0
+google-api-python-client==2.108.0
+google-auth-oauthlib==1.1.0
+google-auth-httplib2==0.1.1
+pydantic[email]>=2.9.0
+pydantic-settings>=2.6.0
+sqlalchemy==2.0.23
+python-multipart==0.0.6
+httpx==0.24.1
+yt-dlp==2023.12.30
+firebase-admin==6.4.0
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+syncsdk>=0.2.7

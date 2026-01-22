@@ -1,0 +1,66 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Firebase service account keys
+*-firebase-adminsdk-*.json
+serviceAccountKey.json
+firebase-adminsdk-*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Local storage
+storage/
+processed_videos/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+temp/
+tmp/
