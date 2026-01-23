@@ -10,6 +10,7 @@ from services.firestore import firestore_service
 from services.video_download import download_video
 from services.synclabs import process_lip_sync, download_video_from_url
 from services.storage import get_storage_service
+from services.elevenlabs_service import elevenlabs_service
 from routers.youtube_auth import get_youtube_service
 from config import settings
 
@@ -50,9 +51,44 @@ async def process_dubbing_job(job_id: str):
         
         for idx, language_code in enumerate(target_languages):
             try:
-                # Get localized audio (placeholder - in production, get from ElevenLabs)
-                # For now, we'll use the original audio
-                localized_audio_path = audio_path
+                # Get localized audio using ElevenLabs
+                if settings.elevenlabs_api_key:
+                    print(f"[DUBBING] usage ElevenLabs for {language_code}")
+                    
+                    # Ensure public URL for source video
+                    # We utilize the storage service to get a public URL for the video
+                    # This might be redundant if we did it outside, but it ensures we have it
+                    video_url_for_elevenlabs = storage_service.upload_and_get_public_url(
+                        file_path=video_path,
+                        user_id=user_id,
+                        job_id=job_id,
+                        filename='original_video_for_elevenlabs.mp4'
+                    )
+
+                    dubbing_id = await elevenlabs_service.create_dubbing_task(
+                        source_url=video_url_for_elevenlabs,
+                        target_lang=language_code
+                    )
+                    
+                    print(f"[DUBBING] ElevenLabs task started: {dubbing_id}")
+                    await elevenlabs_service.wait_for_completion(dubbing_id)
+                    
+                    localized_audio_path = os.path.join(
+                        tempfile.gettempdir(), 
+                        f'elevenlabs_audio_{job_id}_{language_code}.mp3'
+                    )
+                    await elevenlabs_service.download_dubbed_audio(
+                        dubbing_id, 
+                        language_code, 
+                        localized_audio_path
+                    )
+                    
+                    # Cleanup ElevenLabs project to save space/clutter
+                    await elevenlabs_service.delete_dubbing_project(dubbing_id)
+                    
+                else:
+                    # Fallback to original audio if no key provided
+                    localized_audio_path = audio_path
                 
                 print(f"[DUBBING] Processing language: {language_code}")
                 

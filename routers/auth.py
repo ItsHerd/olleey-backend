@@ -6,7 +6,7 @@ from typing import Optional
 import httpx
 
 from config import settings
-from schemas.auth import UserInfo, UserRegisterRequest, UserLoginRequest, TokenResponse, RefreshTokenRequest
+from schemas.auth import UserInfo, UserRegisterRequest, UserLoginRequest, TokenResponse, RefreshTokenRequest, GoogleOAuthRequest
 from middleware.auth import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -234,6 +234,134 @@ async def login_user(request: UserLoginRequest):
             status_code=500,
             detail=f"Login failed: {str(e)}"
         )
+
+
+@router.post(
+    "/google",
+    response_model=TokenResponse,
+    responses={
+        200: {
+            "description": "Google sign-in successful",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjA4MmU5NzVlMDdkZmE0OTYwYzdiN2I0ZmMxZDEwZjkxNmRjMmY1NWIiLCJ0eXAiOiJKV1QifQ...",
+                        "refresh_token": "AMf-vBxAtBIKeMkKj0cZH79SHm3eQaH4kA2omfT2JV3f6h4aIvV1Mf89o6-ExkqWawmZ9kTpuxBtJ_w2dDjpZORRuXZ1CaqlViBst4ENA-hgp6QtjzKMzsKYNpcrEpAiflBMkPHRZc85eeomugbu2UJ5Pof8EXyb7yhIICqeQvV_2ctTYRwXVFLa49kRW6vL_K85nN1HR2zf9sEubsVqx6P0tl4-KOqnB6c_pNwmje6Wjz-hogjCu_8",
+                        "token_type": "Bearer",
+                        "expires_in": 3600
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "Invalid Google ID token",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid Google ID token"}
+                }
+            }
+        },
+        500: {
+            "description": "Firebase configuration error",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Firebase Web API key not configured"}
+                }
+            }
+        }
+    }
+)
+async def google_sign_in(request: GoogleOAuthRequest):
+    """
+    Sign in or register user with Google OAuth.
+    
+    This endpoint accepts a Google ID token from the client (obtained via Google Sign-In)
+    and exchanges it for Firebase credentials. If the user doesn't exist, they are
+    automatically created.
+    
+    Client-side flow:
+    1. User clicks "Sign in with Google"
+    2. Client uses Google Sign-In SDK to get Google ID token
+    3. Client sends Google ID token to this endpoint
+    4. Server verifies token and returns Firebase credentials
+    
+    Args:
+        request: Google OAuth request with ID token
+        
+    Returns:
+        TokenResponse: Firebase ID token and refresh token
+    """
+    try:
+        api_key = settings.firebase_web_api_key
+        
+        if not api_key:
+            raise HTTPException(
+                status_code=500,
+                detail="Firebase Web API key not configured. Please set FIREBASE_WEB_API_KEY in your .env file. You can find this key in Firebase Console > Project Settings > General > Web API Key"
+            )
+        
+        # Use Firebase Auth REST API to sign in with Google ID token
+        # This will create the user if they don't exist
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={api_key}",
+                json={
+                    "postBody": f"id_token={request.id_token}&providerId=google.com",
+                    "requestUri": settings.google_redirect_uri,
+                    "returnSecureToken": True,
+                    "returnIdpCredential": True
+                },
+                timeout=10.0
+            )
+            
+            if response.status_code != 200:
+                error_data = response.json()
+                error_message = error_data.get("error", {}).get("message", "Google sign-in failed")
+                
+                # Check for API key errors
+                if "API key not valid" in error_message or "INVALID_API_KEY" in error_message:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Invalid Firebase Web API key. Please check your FIREBASE_WEB_API_KEY in .env file. Get it from Firebase Console > Project Settings > General > Web API Key"
+                    )
+                
+                if "INVALID_IDP_RESPONSE" in error_message or "INVALID_ID_TOKEN" in error_message:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid Google ID token. Please ensure you're using a valid token from Google Sign-In."
+                    )
+                
+                if "FEDERATED_USER_ID_ALREADY_LINKED" in error_message:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This Google account is already linked to another user."
+                    )
+                
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Google sign-in failed: {error_message}"
+                )
+            
+            data = response.json()
+            
+            # Check if this is a new user
+            is_new_user = data.get("isNewUser", False)
+            
+            return TokenResponse(
+                access_token=data["idToken"],
+                refresh_token=data["refreshToken"],
+                token_type="Bearer",
+                expires_in=int(data.get("expiresIn", 3600))
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Google sign-in failed: {str(e)}"
+        )
+
 
 
 @router.get(

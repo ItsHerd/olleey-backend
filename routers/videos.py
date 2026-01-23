@@ -1,4 +1,5 @@
 """Video management router for YouTube operations."""
+from collections import defaultdict
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from typing import Optional
 from googleapiclient.discovery import build
@@ -94,15 +95,66 @@ async def get_mock_videos(user_id: str, limit: int) -> VideoListResponse:
     mock_videos_data = mock_videos_data[:limit]
     
     # Query Firestore to determine which videos are original vs translated
+    # Wrap in try-except to ensure videos always appear even if Firestore fails
     videos = []
     for mock_video in mock_videos_data:
         video_id = mock_video["video_id"]
         
-        # Check if this is a translated video
-        localized = firestore_service.get_localized_video_by_localized_id(video_id, user_id)
-        
-        if localized:
-            # This is a translated video
+        try:
+            # Check if this is a translated video
+            localized = firestore_service.get_localized_video_by_localized_id(video_id, user_id)
+            
+            if localized:
+                # This is a translated video
+                video_item = VideoItem(
+                    video_id=video_id,
+                    title=mock_video["title"],
+                    thumbnail_url=mock_video["thumbnail_url"],
+                    published_at=datetime.fromisoformat(mock_video["published_at"].replace('Z', '+00:00')),
+                    channel_id=mock_video["channel_id"],
+                    channel_name=mock_video["channel_name"],
+                    video_type="translated",
+                    source_video_id=localized.get('source_video_id'),
+                    translated_languages=[]
+                )
+            else:
+                # Check if this is an original video with translations
+                localized_list = firestore_service.get_localized_videos_by_source_id(video_id, user_id)
+                
+                if localized_list:
+                    # Original video with translations
+                    translated_languages = [
+                        loc.get('language_code')
+                        for loc in localized_list
+                        if loc.get('language_code')
+                    ]
+                    video_item = VideoItem(
+                        video_id=video_id,
+                        title=mock_video["title"],
+                        thumbnail_url=mock_video["thumbnail_url"],
+                        published_at=datetime.fromisoformat(mock_video["published_at"].replace('Z', '+00:00')),
+                        channel_id=mock_video["channel_id"],
+                        channel_name=mock_video["channel_name"],
+                        video_type="original",
+                        source_video_id=None,
+                        translated_languages=translated_languages
+                    )
+                else:
+                    # Original video without translations
+                    video_item = VideoItem(
+                        video_id=video_id,
+                        title=mock_video["title"],
+                        thumbnail_url=mock_video["thumbnail_url"],
+                        published_at=datetime.fromisoformat(mock_video["published_at"].replace('Z', '+00:00')),
+                        channel_id=mock_video["channel_id"],
+                        channel_name=mock_video["channel_name"],
+                        video_type="original",
+                        source_video_id=None,
+                        translated_languages=[]
+                    )
+        except Exception as e:
+            # If Firestore query fails, still return the video as original
+            print(f"[VIDEOS] Firestore query failed for video {video_id}, returning as original: {str(e)}")
             video_item = VideoItem(
                 video_id=video_id,
                 title=mock_video["title"],
@@ -110,51 +162,17 @@ async def get_mock_videos(user_id: str, limit: int) -> VideoListResponse:
                 published_at=datetime.fromisoformat(mock_video["published_at"].replace('Z', '+00:00')),
                 channel_id=mock_video["channel_id"],
                 channel_name=mock_video["channel_name"],
-                video_type="translated",
-                source_video_id=localized.get('source_video_id'),
+                video_type="original",
+                source_video_id=None,
                 translated_languages=[]
             )
-        else:
-            # Check if this is an original video with translations
-            localized_list = firestore_service.get_localized_videos_by_source_id(video_id, user_id)
-            
-            if localized_list:
-                # Original video with translations
-                translated_languages = [
-                    loc.get('language_code')
-                    for loc in localized_list
-                    if loc.get('language_code')
-                ]
-                video_item = VideoItem(
-                    video_id=video_id,
-                    title=mock_video["title"],
-                    thumbnail_url=mock_video["thumbnail_url"],
-                    published_at=datetime.fromisoformat(mock_video["published_at"].replace('Z', '+00:00')),
-                    channel_id=mock_video["channel_id"],
-                    channel_name=mock_video["channel_name"],
-                    video_type="original",
-                    source_video_id=None,
-                    translated_languages=translated_languages
-                )
-            else:
-                # Original video without translations
-                video_item = VideoItem(
-                    video_id=video_id,
-                    title=mock_video["title"],
-                    thumbnail_url=mock_video["thumbnail_url"],
-                    published_at=datetime.fromisoformat(mock_video["published_at"].replace('Z', '+00:00')),
-                    channel_id=mock_video["channel_id"],
-                    channel_name=mock_video["channel_name"],
-                    video_type="original",
-                    source_video_id=None,
-                    translated_languages=[]
-                )
         
         videos.append(video_item)
     
     # Sort by published_at descending
     videos.sort(key=lambda x: x.published_at, reverse=True)
     
+    print(f"[VIDEOS] Returning {len(videos)} mock videos for user {user_id}")
     return VideoListResponse(videos=videos, total=len(videos))
 
 
@@ -257,23 +275,22 @@ async def list_videos(
         videos = []
         video_ids = [video['id'] for video in videos_response.get('items', [])]
         
-        # Check Firestore to determine which videos are original vs translated
-        # Batch query: check if any video_ids are localized_video_ids
+        # Optimize: Fetch ALL localized videos for the user in one go (or via batch if implemented)
+        # This replaces the N+1 query loop.
+        all_user_localized_videos = firestore_service.get_all_localized_videos_for_user(user_id)
+        
         localized_videos_map = {}  # localized_video_id -> localized_video_data
-        source_videos_map = {}  # source_video_id -> list of localized_videos
+        source_videos_map = defaultdict(list)  # source_video_id -> list of localized_videos
         
-        # Query for videos that are translated versions (localized_video_id matches)
-        for video_id in video_ids:
-            localized = firestore_service.get_localized_video_by_localized_id(video_id, user_id)
-            if localized:
-                localized_videos_map[video_id] = localized
-        
-        # Query for videos that are originals (source_video_id matches)
-        for video_id in video_ids:
-            if video_id not in localized_videos_map:  # Only check if not already found as translated
-                localized_list = firestore_service.get_localized_videos_by_source_id(video_id, user_id)
-                if localized_list:
-                    source_videos_map[video_id] = localized_list
+        # Populate maps from the bulk fetched data
+        for loc_video in all_user_localized_videos:
+            # Map by localized_video_id
+            if loc_video.get('localized_video_id'):
+                localized_videos_map[loc_video['localized_video_id']] = loc_video
+                
+            # Map by source_video_id
+            if loc_video.get('source_video_id'):
+                source_videos_map[loc_video['source_video_id']].append(loc_video)
         
         # Build video items with type information
         for video in videos_response.get('items', []):

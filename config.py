@@ -31,16 +31,50 @@ class Settings(BaseSettings):
     # Sync Labs API (for lip sync)
     sync_labs_api_key: Optional[str] = None
     sync_labs_base_url: str = "https://api.synclabs.so"
-    
+
+    # ElevenLabs
+    elevenlabs_api_key: Optional[str] = None
+    elevenlabs_base_url: str = "https://api.elevenlabs.io/v1"
+        
     # Firebase/Firestore
-    firebase_project_id: str = "vox-translate-b8c94"  # Default to your project
-    firebase_credentials_path: str = "./vox-translate-b8c94-firebase-adminsdk-fbsvc-43eee8c143.json"  # Default path to service account JSON
-    firebase_web_api_key: Optional[str] = None  # Firebase Web API key for Auth REST API
+    # Production Credentials
+    firebase_project_id_prod: str = "vox-translate-b8c94"
+    firebase_credentials_path_prod: str = "./vox-translate-b8c94-firebase-adminsdk-fbsvc-43eee8c143.json"
+    firebase_web_api_key_prod: Optional[str] = None
+
+    # Test Credentials
+    firebase_project_id_test: str = "olleey-test"
+    firebase_credentials_path_test: str = "./olleey-test-firebase-adminsdk.json"
+    firebase_web_api_key_test: Optional[str] = "AIzaSyBEi-QjTm_3uc5Zf2qaHfG2FkD1DhYGteE"
+
+    @property
+    def firebase_project_id(self) -> str:
+        """Get active project ID based on environment."""
+        if self.use_mock_db: # Fallback if flag is still true, though we removed implementation
+             return "mock-project"
+        if self.environment.lower() in ["test", "testing"]:
+            return self.firebase_project_id_test
+        return self.firebase_project_id_prod
+
+    @property
+    def firebase_credentials_path(self) -> str:
+        """Get active credentials path based on environment."""
+        if self.environment.lower() in ["test", "testing"]:
+            return self.firebase_credentials_path_test
+        return self.firebase_credentials_path_prod
+
+    @property
+    def firebase_web_api_key(self) -> Optional[str]:
+        """Get active Web API Key based on environment."""
+        if self.environment.lower() in ["test", "testing"]:
+            return self.firebase_web_api_key_test
+        return self.firebase_web_api_key_prod
     
     # Local Storage
     local_storage_dir: str = "./storage"  # Directory for storing processed videos locally
     
     # OAuth Scopes
+    use_mock_db: bool = False
     youtube_scopes: list[str] = [
         "https://www.googleapis.com/auth/youtube.upload",
         "https://www.googleapis.com/auth/youtube.readonly",
@@ -51,6 +85,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"
 
 
 settings = Settings()

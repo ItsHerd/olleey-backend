@@ -7,7 +7,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://127.0.0.1:8000"
 TEST_USER_ID = "12345678901234567890"
 
 
@@ -26,13 +26,22 @@ def print_response(method: str, endpoint: str, response: requests.Response):
     print()
 
 
+def get_session():
+    """Get requests session with mock auth."""
+    session = requests.Session()
+    session.headers.update({"Authorization": "Bearer mock-token"})
+    return session
+
+
+
 def test_auth_endpoints():
     """Test authentication endpoints."""
     print("\n🔐 Testing Authentication Endpoints")
     print("="*60)
     
+    session = get_session()
     # Test /auth/me
-    response = requests.get(f"{BASE_URL}/auth/me", params={"user_id": TEST_USER_ID})
+    response = session.get(f"{BASE_URL}/auth/me", params={"user_id": TEST_USER_ID})
     print_response("GET", "/auth/me", response)
 
 
@@ -41,8 +50,9 @@ def test_channel_endpoints():
     print("\n📺 Testing Channel Endpoints")
     print("="*60)
     
+    session = get_session()
     # Test GET /channels
-    response = requests.get(f"{BASE_URL}/channels", params={"user_id": TEST_USER_ID})
+    response = session.get(f"{BASE_URL}/channels", params={"user_id": TEST_USER_ID})
     print_response("GET", "/channels", response)
 
 
@@ -51,8 +61,9 @@ def test_job_endpoints():
     print("\n⚙️  Testing Job Endpoints")
     print("="*60)
     
+    session = get_session()
     # Test GET /jobs (list all jobs)
-    response = requests.get(f"{BASE_URL}/jobs", params={"user_id": TEST_USER_ID})
+    response = session.get(f"{BASE_URL}/jobs", params={"user_id": TEST_USER_ID})
     print_response("GET", "/jobs", response)
     
     # Get first job ID if available
@@ -63,14 +74,14 @@ def test_job_endpoints():
             first_job_id = jobs[0].get("job_id")
             
             # Test GET /jobs/{job_id}
-            response = requests.get(
+            response = session.get(
                 f"{BASE_URL}/jobs/{first_job_id}",
                 params={"user_id": TEST_USER_ID}
             )
             print_response("GET", f"/jobs/{first_job_id}", response)
             
             # Test filtering by status
-            response = requests.get(
+            response = session.get(
                 f"{BASE_URL}/jobs",
                 params={"user_id": TEST_USER_ID, "status": "completed"}
             )
@@ -82,8 +93,9 @@ def test_video_endpoints():
     print("\n🎥 Testing Video Endpoints")
     print("="*60)
     
+    session = get_session()
     # Test GET /videos/list
-    response = requests.get(
+    response = session.get(
         f"{BASE_URL}/videos/list",
         params={"user_id": TEST_USER_ID, "limit": 5}
     )

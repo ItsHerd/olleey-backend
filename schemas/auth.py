@@ -64,6 +64,18 @@ class RefreshTokenRequest(BaseModel):
         }
 
 
+class GoogleOAuthRequest(BaseModel):
+    """Request model for Google OAuth sign-in."""
+    id_token: str = Field(..., description="Google ID token from client-side Google Sign-In")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImE3NGMzMTg3NjkwZGVmYzBjYTRlZWNmZDg2MWY3ZmQ1ZjBhNjhiZjEiLCJ0eXAiOiJKV1QifQ..."
+            }
+        }
+
+
 class UserInfo(BaseModel):
     """User information model."""
     user_id: str = Field(..., example="gwWVssEfHXf1e1C0DtRCU21o41x1", description="Firebase user ID (UID)")

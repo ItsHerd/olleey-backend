@@ -388,6 +388,65 @@ class FirestoreService:
                 results.append({'id': doc.id, **data})
         return results
     
+    def get_all_localized_videos_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+        """
+        Get ALL localized videos for a user.
+        
+        This is optimized to avoid N+1 queries when listing videos.
+        Instead of querying for each video ID, we fetch all localized videos for the user
+        (filtering by job ownership is implicit if we trust the localized_videos table structure,
+         but ideally localized_videos should have user_id. Since it doesn't, we rely on job_id link).
+         
+        However, to be safe and performant, we might need a composite index if we filter by job field.
+        A better approach given existing schema:
+        1. Fetch all jobs for user (already efficient)
+        2. Fetch all localized videos that match these job IDs.
+           - But 'in' query on job_id limit is 30.
+        
+        Alternative:
+        Fetch ALL localized videos. This collection might be large.
+        
+        Best approach for now without schema change:
+        fetch all localized_videos (if collection is not massive) or ADD user_id to localized_videos schema.
+        
+        Let's ADD user_id to localized_videos queries if possible, but the schema doesn't have it.
+        We will iterate over all localized videos and filter in memory if the dataset is small (unlikely for prod).
+        
+        OPTIMAL FIX for N+1:
+        We will rely on the fact that we can get all JOBs for a user efficiently.
+        Then we get all localized videos for those jobs. 
+        Since we can't do a massive 'in' query, and we don't have user_id on localized_videos...
+        
+        Hack for now:
+        We will fetch all localized_videos. This is bad for scale but solves the immediate "quota" issue by doing 1 big read instead of N small ones if N is large.
+        Wait, scanning the whole collection is worse for quota if collection is huge.
+        
+        Let's modify create_localized_video to include user_id, 
+        but for existing data we are stuck.
+        
+        Let's assume we can add user_id to localized_videos in the future.
+        For now, let's try to filter by job_ids in batches if we have the job list.
+        """
+        # Get all user jobs first
+        jobs, _ = self.list_processing_jobs(user_id, limit=1000)
+        job_ids = [j['id'] for j in jobs]
+        
+        if not job_ids:
+            return []
+            
+        # Batch fetch localized videos by job_id
+        # Firestore 'in' limit is 30.
+        results = []
+        chunk_size = 30
+        for i in range(0, len(job_ids), chunk_size):
+            chunk = job_ids[i:i + chunk_size]
+            query = self._where(self.db.collection('localized_videos'), 'job_id', 'in', chunk)
+            docs = query.stream()
+            for doc in docs:
+                results.append({'id': doc.id, **doc.to_dict()})
+                
+        return results
+    
     # YouTube Connection operations
     def create_youtube_connection(self, user_id: str, youtube_channel_id: str,
                                   access_token: str, refresh_token: str,
@@ -567,4 +626,6 @@ class FirestoreService:
 
 
 # Global Firestore service instance
+# Global Firestore service instance
 firestore_service = FirestoreService()
+
