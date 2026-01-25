@@ -178,9 +178,53 @@ class FirestoreService:
             'updated_at': firestore_admin.SERVER_TIMESTAMP
         })
     
+    # Project operations
+    def create_project(self, user_id: str, name: str, master_connection_id: Optional[str] = None) -> str:
+        """Create a new project."""
+        project_id = str(uuid.uuid4())
+        doc_ref = self.db.collection('projects').document(project_id)
+        doc_ref.set({
+            'user_id': user_id,
+            'name': name,
+            'master_connection_id': master_connection_id,
+            'created_at': firestore_admin.SERVER_TIMESTAMP,
+            'updated_at': firestore_admin.SERVER_TIMESTAMP
+        })
+        return project_id
+
+    def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Get project by ID."""
+        doc = self.db.collection('projects').document(project_id).get()
+        if doc.exists:
+            data = doc.to_dict()
+            data['id'] = doc.id
+            return data
+        return None
+
+    def list_projects(self, user_id: str) -> List[Dict[str, Any]]:
+        """List all projects for a user."""
+        docs = self._where(self.db.collection('projects'), 'user_id', '==', user_id).stream()
+        projects = []
+        for doc in docs:
+            data = doc.to_dict()
+            data['id'] = doc.id
+            projects.append(data)
+        # Sort by created_at in memory
+        projects.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
+        return projects
+
+    def update_project(self, project_id: str, **updates):
+        """Update project details."""
+        updates['updated_at'] = firestore_admin.SERVER_TIMESTAMP
+        self.db.collection('projects').document(project_id).update(updates)
+
+    def delete_project(self, project_id: str):
+        """Delete a project."""
+        self.db.collection('projects').document(project_id).delete()
+
     # Processing Job operations
     def create_processing_job(self, source_video_id: str, source_channel_id: str,
-                            user_id: str, target_languages: List[str]) -> str:
+                            user_id: str, target_languages: List[str], project_id: Optional[str] = None) -> str:
         """Create processing job."""
         job_id = str(uuid.uuid4())
         doc_ref = self.db.collection('processing_jobs').document(job_id)
@@ -188,6 +232,7 @@ class FirestoreService:
             'source_video_id': source_video_id,
             'source_channel_id': source_channel_id,
             'user_id': user_id,
+            'project_id': project_id,
             'status': 'pending',
             'target_languages': target_languages,
             'progress': 0,
@@ -212,9 +257,13 @@ class FirestoreService:
         self.db.collection('processing_jobs').document(job_id).update(updates)
     
     def list_processing_jobs(self, user_id: str, status: Optional[str] = None,
-                           limit: int = 20, offset: int = 0) -> tuple[List[Dict[str, Any]], int]:
-        """List processing jobs for user."""
+                           limit: int = 20, offset: int = 0, project_id: Optional[str] = None) -> tuple[List[Dict[str, Any]], int]:
+        """List processing jobs for user, optionally filtered by project."""
         query = self._where(self.db.collection('processing_jobs'), 'user_id', '==', user_id)
+        
+        if project_id:
+            query = self._where(query, 'project_id', '==', project_id)
+            
         if status:
             query = self._where(query, 'status', '==', status)
         
@@ -256,7 +305,8 @@ class FirestoreService:
                                language_codes: Optional[List[str]] = None,
                                channel_name: Optional[str] = None,
                                channel_avatar_url: Optional[str] = None,
-                               master_connection_id: Optional[str] = None) -> str:
+                               master_connection_id: Optional[str] = None,
+                               project_id: Optional[str] = None) -> str:
         """Create language channel.
         
         Supports both single language (language_code) and multiple languages (language_codes).
@@ -279,6 +329,7 @@ class FirestoreService:
         doc_ref = self.db.collection('language_channels').document(channel_doc_id)
         doc_ref.set({
             'user_id': user_id,
+            'project_id': project_id,
             'channel_id': channel_id,
             'language_code': language_code,  # Keep for backward compatibility
             'language_codes': final_language_codes,  # Store as list
@@ -290,9 +341,14 @@ class FirestoreService:
         })
         return channel_doc_id
     
-    def get_language_channels(self, user_id: str) -> List[Dict[str, Any]]:
-        """Get all language channels for user."""
-        docs = self._where(self.db.collection('language_channels'), 'user_id', '==', user_id).stream()
+    def get_language_channels(self, user_id: str, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all language channels for user, optionally filtered by project."""
+        query = self._where(self.db.collection('language_channels'), 'user_id', '==', user_id)
+        
+        if project_id:
+            query = self._where(query, 'project_id', '==', project_id)
+            
+        docs = query.stream()
         channels = []
         for doc in docs:
             data = doc.to_dict()
@@ -387,6 +443,15 @@ class FirestoreService:
             if job and job.get('user_id') == user_id:
                 results.append({'id': doc.id, **data})
         return results
+    
+    def get_localized_videos_by_job_id(self, job_id: str) -> List[Dict[str, Any]]:
+        """Get all localized videos for a job ID."""
+        query = self._where(
+            self.db.collection('localized_videos'),
+            'job_id', '==', job_id
+        )
+        docs = query.stream()
+        return [{'id': doc.id, **doc.to_dict()} for doc in docs]
     
     def get_all_localized_videos_for_user(self, user_id: str) -> List[Dict[str, Any]]:
         """

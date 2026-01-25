@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 import os
 
 from config import settings
-from routers import auth, videos, localization, webhooks, channels, jobs, youtube_connect, dashboard, settings, events
+from routers import auth, videos, localization, webhooks, channels, jobs, youtube_connect, dashboard, settings, events, projects
 
 
 @asynccontextmanager
@@ -45,6 +45,7 @@ app.include_router(localization.router)
 app.include_router(webhooks.router)
 app.include_router(channels.router)
 app.include_router(jobs.router)
+app.include_router(projects.router)
 app.include_router(settings.router)
 app.include_router(events.router)
 

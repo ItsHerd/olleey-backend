@@ -394,6 +394,113 @@ async def list_videos(
         )
 
 
+@router.get("/{video_id}", response_model=VideoItem)
+async def get_video_details(
+    video_id: str,
+    current_user: dict = Depends(get_current_user)
+) -> VideoItem:
+    """
+    Get details for a specific video.
+    
+    Args:
+        video_id: YouTube video ID
+        current_user: Current authenticated user
+        
+    Returns:
+        VideoItem: Video details with localization status
+    """
+    user_id = current_user["user_id"]
+    
+    try:
+        # Get YouTube service
+        youtube = await asyncio.to_thread(get_youtube_service, user_id, None, False)
+        
+        # Handle Mock Mode
+        if youtube is None:
+            # Check for specific mock videos
+            mock_list = await get_mock_videos(user_id, 100)
+            for video in mock_list.videos:
+                if video.video_id == video_id:
+                    return video
+            
+            # If not found in mock list but we are in mock mode, return a generic mock
+            return VideoItem(
+                video_id=video_id,
+                title="Mock Video Details",
+                thumbnail_url="https://via.placeholder.com/640x360",
+                published_at=datetime.utcnow(),
+                channel_id="UCmonitor_mock",
+                channel_name="Mock Channel",
+                video_type="original",
+                source_video_id=None,
+                translated_languages=[]
+            )
+
+        # Real YouTube API call
+        response = await asyncio.to_thread(
+            youtube.videos().list(
+                part='snippet',
+                id=video_id
+            ).execute
+        )
+        
+        if not response.get('items'):
+            # It might be a dubbing-platform-internal ID (mock) that doesn't exist on YT
+            # Check internal DB just in case it's a localized video record ID?
+            # But the spec says video_id is YouTube ID. 
+            # If not found on YouTube, we return 404.
+            raise HTTPException(status_code=404, detail="Video not found on YouTube")
+            
+        video_data = response['items'][0]
+        snippet = video_data['snippet']
+        
+        # Determine video type from Firestore
+        # Check if this video is a result of a localization (i.e., it is a translated video)
+        localized = firestore_service.get_localized_video_by_localized_id(video_id, user_id)
+        
+        if localized:
+             return VideoItem(
+                video_id=video_id,
+                title=snippet.get('title', ''),
+                thumbnail_url=snippet.get('thumbnails', {}).get('high', {}).get('url', ''),
+                published_at=snippet.get('publishedAt'),
+                channel_id=snippet.get('channelId'),
+                channel_name=snippet.get('channelTitle'),
+                video_type="translated",
+                source_video_id=localized.get('source_video_id'),
+                translated_languages=[]
+            )
+            
+        # Check if this is an original video that has translations
+        localized_list = firestore_service.get_localized_videos_by_source_id(video_id, user_id)
+        translated_languages = [
+            loc.get('language_code') 
+            for loc in localized_list 
+            if loc.get('language_code')
+        ]
+        
+        return VideoItem(
+            video_id=video_id,
+            title=snippet.get('title', ''),
+            thumbnail_url=snippet.get('thumbnails', {}).get('high', {}).get('url', ''),
+            published_at=snippet.get('publishedAt'),
+            channel_id=snippet.get('channelId'),
+            channel_name=snippet.get('channelTitle'),
+            video_type="original",
+            source_video_id=None,
+            translated_languages=translated_languages
+        )
+
+    except HttpError as e:
+        if e.resp.status == 404:
+            raise HTTPException(status_code=404, detail="Video not found")
+        raise HTTPException(status_code=500, detail=f"YouTube API error: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch video details: {str(e)}")
+
+
 @router.post("/upload", response_model=VideoUploadResponse)
 async def upload_video(
     title: str = Form(...),

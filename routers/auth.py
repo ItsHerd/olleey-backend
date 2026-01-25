@@ -7,6 +7,7 @@ import httpx
 
 from config import settings
 from schemas.auth import UserInfo, UserRegisterRequest, UserLoginRequest, TokenResponse, RefreshTokenRequest, GoogleOAuthRequest
+from services.firestore import firestore_service
 from middleware.auth import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -65,6 +66,13 @@ async def register_user(request: UserRegisterRequest):
             display_name=request.name,
             email_verified=False
         )
+        
+        # Automatically create Default Project for new user
+        try:
+            firestore_service.create_project(user_record.uid, "Default Project")
+        except Exception as e:
+            # Log error but don't fail registration
+            print(f"[AUTH] Failed to create Default Project for user {user_record.uid}: {e}")
         
         # After creating user, we need to get an ID token
         # We can use Firebase Auth REST API to sign in the newly created user
@@ -346,6 +354,14 @@ async def google_sign_in(request: GoogleOAuthRequest):
             
             # Check if this is a new user
             is_new_user = data.get("isNewUser", False)
+            if is_new_user:
+                try:
+                    # Automatically create Default Project for new user
+                    user_id = data.get("localId")
+                    if user_id:
+                        firestore_service.create_project(user_id, "Default Project")
+                except Exception as e:
+                    print(f"[AUTH] Failed to create Default Project for Google user: {e}")
             
             return TokenResponse(
                 access_token=data["idToken"],

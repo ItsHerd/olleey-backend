@@ -12,6 +12,7 @@ async def enqueue_dubbing_job(
     source_channel_id: str,
     user_id: str,
     target_languages: list[str],
+    project_id: Optional[str] = None,
     db: Optional[None] = None,  # Kept for compatibility but not used
     background_tasks: Optional[BackgroundTasks] = None
 ) -> str:
@@ -34,7 +35,8 @@ async def enqueue_dubbing_job(
         source_video_id=source_video_id,
         source_channel_id=source_channel_id,
         user_id=user_id,
-        target_languages=target_languages
+        target_languages=target_languages,
+        project_id=project_id
     )
     
     # Enqueue to background task

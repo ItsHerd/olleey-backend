@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import List
 import json
 
-from schemas.dashboard import DashboardResponse, YouTubeConnectionSummary, ProcessingJobSummary
+from schemas.dashboard import DashboardResponse, YouTubeConnectionSummary, ProcessingJobSummary, ProjectSummary
 from middleware.auth import get_current_user
 from services.firestore import firestore_service
 from firebase_admin import auth
@@ -36,7 +36,9 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
                                 "completed_jobs": 0,
                                 "recent_jobs": [],
                                 "language_channels": [],
-                                "total_language_channels": 0
+                                "total_language_channels": 0,
+                                "projects": [{"id": "p1", "name": "Default Project", "created_at": "2026-01-18T19:51:14.015000"}],
+                                "total_projects": 1
                             }
                         },
                         "connected_user": {
@@ -79,7 +81,9 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
                                         "created_at": "2026-01-18T20:00:00"
                                     }
                                 ],
-                                "total_language_channels": 1
+                                "total_language_channels": 1,
+                                "projects": [],
+                                "total_projects": 0
                             }
                         }
                     }
@@ -107,6 +111,7 @@ async def get_dashboard(
     - YouTube channel connections
     - Processing jobs summary
     - Language channels
+    - Projects
     
     For new users (no YouTube connection), returns appropriate empty/default data.
     
@@ -153,7 +158,7 @@ async def get_dashboard(
             active_jobs = sum(
                 1
                 for job in jobs_data
-                if job.get('status') in ['pending', 'downloading', 'processing', 'uploading']
+                if job.get('status') in ['pending', 'downloading', 'processing', 'uploading', 'waiting_approval']
             )
             completed_jobs = sum(1 for job in jobs_data if job.get('status') == 'completed')
 
@@ -188,6 +193,21 @@ async def get_dashboard(
                 )
         except Exception as e:
             print("[DASHBOARD_WARN] failed to load language_channels:", str(e))
+            
+        # Get projects
+        projects: List[ProjectSummary] = []
+        try:
+            projects_data = firestore_service.list_projects(user_id)
+            for proj in projects_data:
+                projects.append(
+                   ProjectSummary(
+                       id=proj.get('id', ''),
+                       name=proj.get('name', 'Untitled Project'),
+                       created_at=proj.get('created_at', datetime.utcnow())
+                   ) 
+                )
+        except Exception as e:
+            print("[DASHBOARD_WARN] failed to load projects:", str(e))
         
         # Determine auth provider
         auth_provider = "email"
@@ -220,7 +240,11 @@ async def get_dashboard(
             
             # Language channels
             language_channels=language_channels,
-            total_language_channels=len(language_channels)
+            total_language_channels=len(language_channels),
+            
+            # Projects
+            projects=projects,
+            total_projects=len(projects)
         )
 
         print(
@@ -236,6 +260,7 @@ async def get_dashboard(
                     "active_jobs": response.active_jobs,
                     "completed_jobs": response.completed_jobs,
                     "total_language_channels": response.total_language_channels,
+                    "total_projects": response.total_projects
                 },
                 default=str,
             ),
@@ -261,7 +286,9 @@ async def get_dashboard(
             completed_jobs=0,
             recent_jobs=[],
             language_channels=[],
-            total_language_channels=0
+            total_language_channels=0,
+            projects=[],
+            total_projects=0
         )
 
         print(
@@ -277,6 +304,7 @@ async def get_dashboard(
                     "active_jobs": response.active_jobs,
                     "completed_jobs": response.completed_jobs,
                     "total_language_channels": response.total_language_channels,
+                    "total_projects": response.total_projects,
                     "error": str(e),
                 },
                 default=str,

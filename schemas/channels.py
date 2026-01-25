@@ -15,6 +15,7 @@ class LanguageChannelRequest(BaseModel):
     language_codes: Optional[List[str]] = None  # List of ISO 639-1 language codes
     channel_name: Optional[str] = None
     master_connection_id: Optional[str] = None  # Master YouTube connection to associate with
+    project_id: Optional[str] = None  # Project ID to associate with
     
     class Config:
         json_schema_extra = {
@@ -36,6 +37,7 @@ class LanguageChannelResponse(BaseModel):
     channel_name: Optional[str] = None
     channel_avatar_url: Optional[str] = None
     is_paused: bool = False
+    project_id: Optional[str] = None
     created_at: datetime
 
 

@@ -109,3 +109,34 @@ class ElevenLabsService:
 
 # Singleton instance
 elevenlabs_service = ElevenLabsService()
+
+# Monkey patch for testing/mocking if needed
+if settings.environment == "test" or settings.use_mock_db:
+    async def mock_create_dubbing_task(self, source_url: str, target_lang: str, source_lang: str = "auto") -> str:
+        print("[MOCK] ElevenLabs create_dubbing_task called")
+        return f"mock_dubbing_id_{target_lang}"
+
+    async def mock_get_dubbing_status(self, dubbing_id: str) -> str:
+        print(f"[MOCK] ElevenLabs get_dubbing_status called for {dubbing_id}")
+        return "dubbed"
+        
+    async def mock_wait_for_completion(self, dubbing_id: str, check_interval: int = 10, timeout: int = 1200) -> bool:
+        print(f"[MOCK] ElevenLabs wait_for_completion called for {dubbing_id}")
+        return True
+
+    async def mock_download_dubbed_audio(self, dubbing_id: str, language_code: str, output_path: str) -> str:
+        print(f"[MOCK] ElevenLabs download_dubbed_audio called for {dubbing_id}")
+        # Create a dummy audio file
+        with open(output_path, "wb") as f:
+            f.write(b"mock_audio_content")
+        return output_path
+        
+    async def mock_delete_dubbing_project(self, dubbing_id: str):
+        print(f"[MOCK] ElevenLabs delete_dubbing_project called for {dubbing_id}")
+        pass
+
+    ElevenLabsService.create_dubbing_task = mock_create_dubbing_task
+    ElevenLabsService.get_dubbing_status = mock_get_dubbing_status
+    ElevenLabsService.wait_for_completion = mock_wait_for_completion
+    ElevenLabsService.download_dubbed_audio = mock_download_dubbed_audio
+    ElevenLabsService.delete_dubbing_project = mock_delete_dubbing_project

@@ -1,6 +1,6 @@
 """Language channel management router."""
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 import asyncio
 
@@ -213,6 +213,7 @@ async def get_channel_graph(
 
 @router.get("", response_model=ChannelListResponse)
 async def list_channels(
+    project_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ) -> ChannelListResponse:
     """
@@ -225,7 +226,7 @@ async def list_channels(
         ChannelListResponse: List of language channels
     """
     user_id = current_user["user_id"]
-    channels = firestore_service.get_language_channels(user_id)
+    channels = firestore_service.get_language_channels(user_id, project_id=project_id)
     
     channel_responses = []
     for ch in channels:
@@ -249,6 +250,7 @@ async def list_channels(
             channel_name=ch.get('channel_name'),
             channel_avatar_url=ch.get('channel_avatar_url'),
             is_paused=ch.get('is_paused', False),
+            project_id=ch.get('project_id'),
             created_at=created_at or datetime.utcnow()
         ))
     
@@ -408,6 +410,7 @@ async def create_channel(
                     channel_name=updated_channel.get('channel_name'),
                     channel_avatar_url=updated_channel.get('channel_avatar_url'),
                     is_paused=updated_channel.get('is_paused', False),
+                    project_id=updated_channel.get('project_id'),
                     created_at=created_at or datetime.utcnow()
                 )
             else:
@@ -425,7 +428,8 @@ async def create_channel(
             language_codes=language_codes,
             channel_name=request.channel_name,
             channel_avatar_url=channel_avatar_url,
-            master_connection_id=master_connection_id  # Associate with master
+            master_connection_id=master_connection_id,  # Associate with master
+            project_id=request.project_id
         )
         
         # Get created channel to return
@@ -461,6 +465,7 @@ async def create_channel(
             channel_name=channel.get('channel_name'),
             channel_avatar_url=channel.get('channel_avatar_url'),
             is_paused=channel.get('is_paused', False),
+            project_id=channel.get('project_id'),
             created_at=created_at or datetime.utcnow()
         )
         
@@ -573,6 +578,7 @@ async def update_channel(
         channel_name=channel.get('channel_name'),
         channel_avatar_url=channel.get('channel_avatar_url'),
         is_paused=channel.get('is_paused', False),
+        project_id=channel.get('project_id'),
         created_at=created_at or datetime.utcnow()
     )
 

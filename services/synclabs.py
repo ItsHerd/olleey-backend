@@ -103,6 +103,23 @@ async def process_lip_sync(
         print(f"[SYNC_LABS] ❌ Error: {str(e)}")
         raise
 
+# Mocking for test environment
+if settings.environment == "test" or settings.use_mock_db:
+    async def mock_process_lip_sync(video_url: str, audio_url: str, sync_mode: str = "loop", model: str = "lipsync-2") -> dict:
+        print(f"[MOCK] Sync Labs process_lip_sync called")
+        print(f"  Video: {video_url}")
+        print(f"  Audio: {audio_url}")
+        
+        # Return a mock result immediately
+        return {
+            "id": "mock_sync_id_12345",
+            "url": video_url, # Return original video as result for testing
+            "status": "COMPLETED",
+            "model": model
+        }
+        
+    process_lip_sync = mock_process_lip_sync
+
 
 async def wait_for_generation(generation_id: str, timeout_seconds: int = 600) -> dict:
     """

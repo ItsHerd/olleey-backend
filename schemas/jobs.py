@@ -6,16 +6,36 @@ from typing import Optional, List
 
 class CreateJobRequest(BaseModel):
     """Request model for creating a dubbing job."""
-    source_video_id: str = Field(..., description="YouTube video ID to dub")
+    source_video_id: Optional[str] = Field(None, description="YouTube video ID to dub (optional if video_url is provided)")
+    source_video_url: Optional[str] = Field(None, description="YouTube video URL (alternative to source_video_id)")
     source_channel_id: str = Field(..., description="YouTube channel ID where video is published")
-    target_languages: List[str] = Field(..., description="List of language codes to create dubs for (e.g., ['es', 'de', 'fr'])")
+    target_channel_ids: List[str] = Field(..., description="List of target channel IDs to publish dubs to (each channel is connected to one or more languages)")
+    project_id: Optional[str] = Field(None, description="Project ID to assign job to")
     
     class Config:
         json_schema_extra = {
             "example": {
                 "source_video_id": "dQw4w9WgXcQ",
                 "source_channel_id": "UCxxxxxx",
-                "target_languages": ["es", "de", "fr"]
+                "target_channel_ids": ["channel_doc_id_1", "channel_doc_id_2"],
+                "project_id": "proj_123"
+            }
+        }
+
+
+class CreateManualJobRequest(BaseModel):
+    """Request model for creating a manual dubbing job with video upload or URL."""
+    source_channel_id: str = Field(..., description="YouTube channel ID where video is published")
+    target_channel_ids: List[str] = Field(..., description="List of target channel IDs to publish dubs to (each channel is connected to one or more languages)")
+    project_id: Optional[str] = Field(None, description="Project ID to assign job to")
+    # Note: video_url or video file will be provided via Form data in the endpoint
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "source_channel_id": "UCxxxxxx",
+                "target_channel_ids": ["channel_doc_id_1", "channel_doc_id_2"],
+                "project_id": "proj_123"
             }
         }
 
@@ -27,6 +47,7 @@ class ProcessingJobResponse(BaseModel):
     progress: Optional[int] = None
     source_video_id: str
     source_channel_id: str
+    project_id: Optional[str] = None
     target_languages: List[str]
     created_at: datetime
     updated_at: datetime

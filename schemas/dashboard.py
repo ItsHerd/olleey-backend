@@ -23,6 +23,13 @@ class ProcessingJobSummary(BaseModel):
     created_at: datetime
 
 
+class ProjectSummary(BaseModel):
+    """Summary of project."""
+    id: str
+    name: str
+    created_at: datetime
+
+
 class DashboardResponse(BaseModel):
     """Dashboard data response."""
     user_id: str
@@ -45,3 +52,7 @@ class DashboardResponse(BaseModel):
     # Language channels
     language_channels: List[dict] = []
     total_language_channels: int = 0
+    
+    # Projects
+    projects: List[ProjectSummary] = []
+    total_projects: int = 0

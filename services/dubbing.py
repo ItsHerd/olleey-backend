@@ -2,17 +2,34 @@
 import os
 import asyncio
 import tempfile
+import json
 from datetime import datetime
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 from services.firestore import firestore_service
+from services.notification import notification_service
 from services.video_download import download_video
 from services.synclabs import process_lip_sync, download_video_from_url
 from services.storage import get_storage_service
 from services.elevenlabs_service import elevenlabs_service
 from routers.youtube_auth import get_youtube_service
 from config import settings
+
+
+async def update_job_status_and_notify(job_id: str, **kwargs):
+    """
+    Helper to update Firestore and broadcast notification.
+    """
+    # 1. Update Firestore
+    firestore_service.update_processing_job(job_id, **kwargs)
+    
+    # 2. Get updated job data for notification
+    # We could fetch it, or construct it from kwargs. Fetching ensures consistency.
+    job = firestore_service.get_processing_job(job_id)
+    if job:
+        # Broadcast update
+        await notification_service.broadcast_job_update(job)
 
 
 async def process_dubbing_job(job_id: str):
@@ -28,7 +45,7 @@ async def process_dubbing_job(job_id: str):
     
     try:
         # Update job status
-        firestore_service.update_processing_job(job_id, status='downloading', progress=10)
+        await update_job_status_and_notify(job_id, status='downloading', progress=10)
         
         # Step 1: Download video from YouTube
         source_video_id = job.get('source_video_id')
@@ -39,7 +56,7 @@ async def process_dubbing_job(job_id: str):
         print(f"[DUBBING] Downloaded video: {video_path}")
         print(f"[DUBBING] Downloaded audio: {audio_path}")
         
-        firestore_service.update_processing_job(job_id, status='processing', progress=30)
+        await update_job_status_and_notify(job_id, status='processing', progress=30)
         
         # Get storage service
         storage_service = get_storage_service()
@@ -136,6 +153,29 @@ async def process_dubbing_job(job_id: str):
                     video_id=f"{source_video_id}_{language_code}"
                 )
                 
+                # Generate URL for storage path
+                base_url = getattr(settings, 'webhook_base_url', 'http://localhost:8000')
+                storage_url = storage_service.get_storage_url(storage_path, base_url)
+                
+                # Get channel ID if available
+                channel_id = ''
+                language_channel = firestore_service.get_language_channel_by_language(
+                    user_id=user_id,
+                    language_code=language_code
+                )
+                if language_channel:
+                    channel_id = language_channel.get('channel_id', '')
+                
+                # Create localized video record with waiting_approval status
+                firestore_service.create_localized_video(
+                    job_id=job_id,
+                    source_video_id=source_video_id,
+                    language_code=language_code,
+                    channel_id=channel_id,
+                    status='waiting_approval',
+                    storage_url=storage_url
+                )
+                
                 processed_videos[language_code] = {
                     'local_path': synced_video_path,
                     'storage_path': storage_path
@@ -143,7 +183,7 @@ async def process_dubbing_job(job_id: str):
                 
                 # Update progress
                 progress = 30 + int((idx + 1) / total_languages * 40)
-                firestore_service.update_processing_job(job_id, progress=progress)
+                await update_job_status_and_notify(job_id, progress=progress)
                 
             except Exception as e:
                 # Log error but continue with other languages
@@ -157,97 +197,12 @@ async def process_dubbing_job(job_id: str):
                 )
                 continue
         
-        # Step 3: Upload to language channels
-        firestore_service.update_processing_job(job_id, status='uploading', progress=70)
-        
-        # Get YouTube service for uploading
-        youtube = await asyncio.to_thread(get_youtube_service, user_id, raise_on_mock=False)
-        if not youtube:
-            raise Exception("Failed to get YouTube service. Please ensure you have a connected YouTube channel.")
-        
-        for idx, language_code in enumerate(processed_videos.keys()):
-            try:
-                # Get language channel
-                language_channel = firestore_service.get_language_channel_by_language(
-                    user_id=user_id,
-                    language_code=language_code
-                )
-                
-                if not language_channel:
-                    # Skip if no channel configured for this language
-                    continue
-                
-                # Skip if channel is paused
-                if language_channel.get('is_paused', False):
-                    print(f"[DUBBING] Skipping paused channel for language: {language_code}")
-                    continue
-                
-                video_info = processed_videos[language_code]
-                processed_video_path = video_info['local_path']
-                storage_path = video_info['storage_path']
-                
-                # Upload to YouTube
-                body = {
-                    'snippet': {
-                        'title': f'[Dubbed] Video {source_video_id}',
-                        'description': f'Localized version in {language_code}',
-                        'categoryId': '22'
-                    },
-                    'status': {
-                        'privacyStatus': 'private',
-                        'selfDeclaredMadeForKids': False
-                    }
-                }
-                
-                media = MediaFileUpload(
-                    processed_video_path,
-                    chunksize=-1,
-                    resumable=True
-                )
-                
-                insert_request = youtube.videos().insert(
-                    part=','.join(body.keys()),
-                    body=body,
-                    media_body=media
-                )
-                
-                response = await asyncio.to_thread(insert_request.execute)
-                localized_video_id = response['id']
-                
-                # Generate URL for storage path
-                base_url = getattr(settings, 'webhook_base_url', 'http://localhost:8000')
-                storage_url = storage_service.get_storage_url(storage_path, base_url)
-                
-                # Store in Firestore with storage URL
-                firestore_service.create_localized_video(
-                    job_id=job_id,
-                    source_video_id=source_video_id,
-                    language_code=language_code,
-                    channel_id=language_channel.get('channel_id'),
-                    localized_video_id=localized_video_id,
-                    status='uploaded',
-                    storage_url=storage_url
-                )
-                
-                # Clean up processed video
-                if os.path.exists(processed_video_path):
-                    os.unlink(processed_video_path)
-                
-                # Update progress
-                progress = 70 + int((idx + 1) / len(processed_videos) * 25)
-                firestore_service.update_processing_job(job_id, progress=progress)
-                
-            except Exception as e:
-                # Log error but continue
-                channel_id = language_channel.get('channel_id') if 'language_channel' in locals() else ''
-                firestore_service.create_localized_video(
-                    job_id=job_id,
-                    source_video_id=source_video_id,
-                    language_code=language_code,
-                    channel_id=channel_id,
-                    status='failed'
-                )
-                continue
+        # Update job status to waiting_approval
+        await update_job_status_and_notify(
+            job_id, 
+            status='waiting_approval', 
+            progress=90
+        )
         
         # Clean up temp storage files
         print(f"[DUBBING] Cleaning up temp files for job {job_id}")
@@ -258,22 +213,152 @@ async def process_dubbing_job(job_id: str):
             os.unlink(video_path)
         if os.path.exists(audio_path) and audio_path != video_path:
             os.unlink(audio_path)
+            
+        # Send system notification for approval
+        await notification_service.broadcast_system_message(
+            user_id,
+            f"Job {job_id} processed and waiting for approval"
+        )
+            
+    except Exception as e:
+        # Update job status to failed
+        await update_job_status_and_notify(
+            job_id,
+            status='failed',
+            error_message=str(e),
+            completed_at=datetime.utcnow()
+        )
+
+
+async def publish_dubbed_videos(job_id: str):
+    """
+    Publish processed videos to YouTube after approval.
+    """
+    try:
+        job = firestore_service.get_processing_job(job_id)
+        if not job:
+            raise ValueError(f"Job {job_id} not found")
         
-        # Update job status
-        firestore_service.update_processing_job(
+        user_id = job.get('user_id')
+        source_video_id = job.get('source_video_id')
+        
+        # Update status to uploading
+        await update_job_status_and_notify(job_id, status='uploading', progress=95)
+        
+        # Get all localized videos (waiting for approval)
+        localized_videos = firestore_service.get_localized_videos_by_job_id(job_id)
+        
+        # Get YouTube service
+        youtube = await asyncio.to_thread(get_youtube_service, user_id, None, False)
+        
+        # Get storage service
+        storage_service = get_storage_service()
+        
+        success_count = 0
+        
+        for video_record in localized_videos:
+            status = video_record.get('status')
+            if status != 'waiting_approval':
+                continue
+                
+            language_code = video_record.get('language_code')
+            print(f"[PUBLISH] Publishing video for language: {language_code}")
+            
+            try:
+                # Extract storage path from storage URL
+                storage_url = video_record.get('storage_url', '')
+                if '/storage/' in storage_url:
+                    relative_path = storage_url.split('/storage/', 1)[1]
+                    local_path = storage_service.get_video_path(relative_path)
+                    
+                    if not local_path or not os.path.exists(local_path):
+                        print(f"[PUBLISH] Video file not found: {relative_path}")
+                        continue
+                        
+                    # Get language channel
+                    language_channel = firestore_service.get_language_channel_by_language(
+                        user_id=user_id,
+                        language_code=language_code
+                    )
+                    
+                    if not language_channel or language_channel.get('is_paused', False):
+                        print(f"[PUBLISH] No active channel for {language_code}, marking as saved")
+                        # Mark as saved locally without upload
+                        firestore_service.update_localized_video(
+                            video_record['id'],
+                            status='saved',
+                            localized_video_id=None
+                        )
+                        success_count += 1
+                        continue
+                        
+                    # Upload to YouTube
+                    if youtube:
+                        body = {
+                            'snippet': {
+                                'title': f'[Dubbed] Video {source_video_id}',
+                                'description': f'Localized version in {language_code}',
+                                'categoryId': '22'
+                            },
+                            'status': {
+                                'privacyStatus': 'private',
+                                'selfDeclaredMadeForKids': False
+                            }
+                        }
+                        
+                        media = MediaFileUpload(
+                            local_path,
+                            chunksize=-1,
+                            resumable=True
+                        )
+                        
+                        insert_request = youtube.videos().insert(
+                            part=','.join(body.keys()),
+                            body=body,
+                            media_body=media
+                        )
+                        
+                        response = await asyncio.to_thread(insert_request.execute)
+                        localized_video_id = response['id']
+                    else:
+                        # Mock ID
+                        localized_video_id = f"mock_upload_{language_code}_{int(datetime.utcnow().timestamp())}"
+                    
+                    # Update localized video record
+                    firestore_service.update_localized_video(
+                        video_record['id'],
+                        status='uploaded',
+                        localized_video_id=localized_video_id
+                    )
+                    
+                    success_count += 1
+                    
+            except Exception as e:
+                print(f"[PUBLISH] Error publishing {language_code}: {str(e)}")
+                firestore_service.update_localized_video(
+                    video_record['id'],
+                    status='failed_upload'
+                )
+                
+        # Update job status to completed
+        await update_job_status_and_notify(
             job_id,
             status='completed',
             progress=100,
             completed_at=datetime.utcnow()
         )
         
-        print(f"[DUBBING] Job {job_id} completed successfully")
+        await notification_service.broadcast_system_message(
+            user_id,
+            f"Job {job_id} published successfully"
+        )
+        
+        return {"success": True, "published_count": success_count}
         
     except Exception as e:
-        # Update job status to failed
-        firestore_service.update_processing_job(
-            job_id,
-            status='failed',
-            error_message=str(e),
-            completed_at=datetime.utcnow()
+        print(f"[PUBLISH] Fatal error: {str(e)}")
+        await update_job_status_and_notify(
+             job_id,
+             error_message=f"Publish failed: {str(e)}"
         )
+        raise
