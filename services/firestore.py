@@ -391,7 +391,10 @@ class FirestoreService:
                               language_code: str, channel_id: str,
                               localized_video_id: Optional[str] = None,
                               status: str = 'pending',
-                              storage_url: Optional[str] = None) -> str:
+                              storage_url: Optional[str] = None,
+                              thumbnail_url: Optional[str] = None,
+                              title: Optional[str] = None,
+                              description: Optional[str] = None) -> str:
         """Create localized video record."""
         video_id = str(uuid.uuid4())
         doc_ref = self.db.collection('localized_videos').document(video_id)
@@ -403,6 +406,9 @@ class FirestoreService:
             'channel_id': channel_id,
             'status': status,
             'storage_url': storage_url,  # URL to video in cloud storage
+            'thumbnail_url': thumbnail_url,  # Thumbnail for preview
+            'title': title,  # Translated title
+            'description': description,  # Translated description
             'created_at': firestore_admin.SERVER_TIMESTAMP,
             'updated_at': firestore_admin.SERVER_TIMESTAMP
         })

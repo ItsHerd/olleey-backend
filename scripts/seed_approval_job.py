@@ -35,6 +35,7 @@ def seed_approval_job():
     
     # 2. Create Localized Videos in waiting_approval
     languages = ['es', 'de']
+    language_names = {'es': 'Spanish', 'de': 'German'}
     
     for lang in languages:
         video_id = str(uuid.uuid4())
@@ -46,6 +47,9 @@ def seed_approval_job():
             'channel_id': f"UCmock_{lang}_channel",
             'status': 'waiting_approval',
             'storage_url': f"/storage/videos/mock_dub_{lang}.mp4",
+            'thumbnail_url': f"https://i.ytimg.com/vi/{source_video_id}/hqdefault.jpg",
+            'title': f"Never Gonna Give You Up - Rick Astley ({language_names[lang]} Dub)",
+            'description': f"This is the {language_names[lang]} dubbed version of the original video. AI-powered dubbing with lip-sync technology.",
             'created_at': firestore.SERVER_TIMESTAMP,
             'updated_at': firestore.SERVER_TIMESTAMP
         }

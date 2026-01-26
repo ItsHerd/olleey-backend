@@ -69,5 +69,8 @@ class LocalizedVideoResponse(BaseModel):
     language_code: str
     status: str
     storage_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
     created_at: datetime
     updated_at: datetime

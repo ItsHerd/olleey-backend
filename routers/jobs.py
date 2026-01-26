@@ -663,6 +663,9 @@ async def get_job_videos(
             language_code=vid.get('language_code'),
             status=vid.get('status'),
             storage_url=vid.get('storage_url'),
+            thumbnail_url=vid.get('thumbnail_url'),
+            title=vid.get('title'),
+            description=vid.get('description'),
             created_at=created_at or datetime.utcnow(),
             updated_at=updated_at or datetime.utcnow()
         ))
