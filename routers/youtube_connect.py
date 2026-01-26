@@ -16,7 +16,7 @@ from schemas.auth import YouTubeConnectionResponse, YouTubeConnectionListRespons
 from services.firestore import firestore_service
 from middleware.auth import get_current_user, get_optional_user
 
-router = APIRouter(prefix="/youtube/connect", tags=["youtube-connection"])
+router = APIRouter(prefix="/youtube", tags=["youtube-connection"])
 
 
 def get_youtube_oauth_flow() -> Flow:
@@ -53,7 +53,7 @@ def get_youtube_oauth_flow() -> Flow:
     return flow
 
 
-@router.get("")
+@router.get("/connect")
 async def initiate_youtube_connection(
     token: Optional[str] = Query(None, description="Firebase ID token (for OAuth redirect flows)"),
     master_connection_id: Optional[str] = Query(None, description="Master connection ID to associate language channel with"),
@@ -152,7 +152,7 @@ async def initiate_youtube_connection(
         )
 
 
-@router.get("/callback")
+@router.get("/connect/callback")
 async def youtube_connection_callback(
     code: Optional[str] = None,
     error: Optional[str] = None,
@@ -631,6 +631,47 @@ async def set_primary_connection(
         )
     
     return {"message": "Primary connection updated successfully"}
+
+
+@router.delete("/connections/{connection_id}/unset-primary")
+async def unset_primary_connection(
+    connection_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Unset a YouTube connection as the primary connection.
+    
+    Args:
+        connection_id: Connection ID to unset as primary
+        current_user: Current authenticated user from Firebase Auth
+        
+    Returns:
+        dict: Update result
+        
+    Raises:
+        HTTPException: If connection not found or not primary
+    """
+    user_id = current_user["user_id"]
+    
+    # Verify connection exists and belongs to user
+    connection = firestore_service.get_youtube_connection(connection_id, user_id)
+    if not connection:
+        raise HTTPException(
+            status_code=404,
+            detail="Connection not found or access denied"
+        )
+    
+    # Check if it's currently primary
+    if not connection.get('is_primary', False):
+        raise HTTPException(
+            status_code=400,
+            detail="Connection is not currently set as primary"
+        )
+    
+    # Unset primary status
+    firestore_service.update_youtube_connection(connection_id, is_primary=False)
+    
+    return {"message": "Primary connection unset successfully"}
 
 
 @router.delete("/connections/{connection_id}")

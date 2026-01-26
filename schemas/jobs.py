@@ -59,3 +59,15 @@ class JobListResponse(BaseModel):
     """Response model for job list."""
     jobs: List[ProcessingJobResponse]
     total: int
+
+
+class LocalizedVideoResponse(BaseModel):
+    """Response model for localized video details."""
+    id: str
+    job_id: str
+    source_video_id: str
+    language_code: str
+    status: str
+    storage_url: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime

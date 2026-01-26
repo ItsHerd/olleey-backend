@@ -8,7 +8,7 @@ import os
 
 from services.firestore import firestore_service
 from services.job_queue import enqueue_dubbing_job
-from schemas.jobs import CreateJobRequest, CreateManualJobRequest, ProcessingJobResponse, JobListResponse
+from schemas.jobs import CreateJobRequest, CreateManualJobRequest, ProcessingJobResponse, JobListResponse, LocalizedVideoResponse
 from middleware.auth import get_current_user
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -609,3 +609,62 @@ async def approve_job(
     background_tasks.add_task(publish_dubbed_videos, job_id)
 
     return {"status": "approved", "message": "Job approved for publishing"}
+
+
+@router.get("/{job_id}/videos", response_model=List[LocalizedVideoResponse])
+async def get_job_videos(
+    job_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get all localized videos for a specific job.
+    
+    This is used by the frontend to fetch video previews for approval.
+    """
+    user_id = current_user["user_id"]
+    
+    # Verify job ownership
+    job = firestore_service.get_processing_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=404, 
+            detail="Job not found"
+        )
+        
+    if job.get('user_id') != user_id:
+        raise HTTPException(
+            status_code=403, 
+            detail="Not authorized to access this job"
+        )
+        
+    # Get localized videos
+    videos = firestore_service.get_localized_videos_by_job_id(job_id)
+    
+    # Convert timestamps and format response
+    response = []
+    for vid in videos:
+        created_at = vid.get('created_at')
+        updated_at = vid.get('updated_at')
+        
+        if hasattr(created_at, 'timestamp'):
+            created_at = datetime.fromtimestamp(created_at.timestamp())
+        elif isinstance(created_at, (int, float)):
+            created_at = datetime.fromtimestamp(created_at)
+            
+        if hasattr(updated_at, 'timestamp'):
+            updated_at = datetime.fromtimestamp(updated_at.timestamp())
+        elif isinstance(updated_at, (int, float)):
+            updated_at = datetime.fromtimestamp(updated_at)
+            
+        response.append(LocalizedVideoResponse(
+            id=vid['id'],
+            job_id=vid.get('job_id'),
+            source_video_id=vid.get('source_video_id'),
+            language_code=vid.get('language_code'),
+            status=vid.get('status'),
+            storage_url=vid.get('storage_url'),
+            created_at=created_at or datetime.utcnow(),
+            updated_at=updated_at or datetime.utcnow()
+        ))
+        
+    return response
