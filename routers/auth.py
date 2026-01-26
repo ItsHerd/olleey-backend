@@ -300,6 +300,10 @@ async def google_sign_in(request: GoogleOAuthRequest):
         TokenResponse: Firebase ID token and refresh token
     """
     try:
+        print(f"[AUTH] Google sign-in request received")
+        print(f"[AUTH] ID token present: {bool(request.id_token)}")
+        print(f"[AUTH] ID token length: {len(request.id_token) if request.id_token else 0}")
+        
         api_key = settings.firebase_web_api_key
         
         if not api_key:

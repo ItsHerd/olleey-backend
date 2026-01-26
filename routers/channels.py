@@ -75,6 +75,7 @@ def check_connection_status(connection: dict) -> ChannelNodeStatus:
 
 @router.get("/graph", response_model=ChannelGraphResponse)
 async def get_channel_graph(
+    project_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ) -> ChannelGraphResponse:
     """
@@ -84,6 +85,7 @@ async def get_channel_graph(
     (language-specific channels) with connection status for visualization.
     
     Args:
+        project_id: Optional project to filter channels and jobs
         current_user: Current authenticated user from Firebase Auth token
         
     Returns:
@@ -94,11 +96,11 @@ async def get_channel_graph(
     # Get all YouTube connections (master nodes)
     youtube_connections = firestore_service.get_youtube_connections(user_id)
     
-    # Get all language channels (satellite nodes)
-    language_channels = firestore_service.get_language_channels(user_id)
+    # Get all language channels (satellite nodes), filtered by project
+    language_channels = firestore_service.get_language_channels(user_id, project_id=project_id)
     
-    # Get job statistics for each connection
-    all_jobs, _ = firestore_service.list_processing_jobs(user_id, limit=1000)
+    # Get job statistics for each connection, filtered by project
+    all_jobs, _ = firestore_service.list_processing_jobs(user_id, limit=1000, project_id=project_id)
     
     master_nodes = []
     active_count = 0
