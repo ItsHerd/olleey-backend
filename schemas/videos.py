@@ -1,7 +1,15 @@
 """Video-related Pydantic schemas."""
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
+
+
+class LocalizationStatus(BaseModel):
+    """Status info for a specific target language."""
+    status: str  # processing, draft, live
+    language_code: str
+    video_id: Optional[str] = None  # YouTube ID of the localized video if live
+    job_id: Optional[str] = None
 
 
 class VideoItem(BaseModel):
@@ -10,11 +18,13 @@ class VideoItem(BaseModel):
     title: str
     thumbnail_url: str
     published_at: datetime
+    view_count: int = 0
     channel_id: str  # YouTube channel ID where video is published
     channel_name: str  # YouTube channel name
-    video_type: str = "original"  # "original" or "translated"
+    video_type: str = "all"  # "all", "original", or "translated"
     source_video_id: Optional[str] = None  # If translated, link to original video
-    translated_languages: list[str] = []  # If original, list of languages it's been translated to
+    localizations: List[LocalizationStatus] = []
+    translated_languages: list[str] = []  # For backward compatibility
 
 
 class VideoListResponse(BaseModel):

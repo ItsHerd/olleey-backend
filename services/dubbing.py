@@ -3,6 +3,7 @@ import os
 import asyncio
 import tempfile
 import json
+import uuid
 from datetime import datetime
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -29,7 +30,12 @@ async def update_job_status_and_notify(job_id: str, **kwargs):
     job = firestore_service.get_processing_job(job_id)
     if job:
         # Broadcast update
-        await notification_service.broadcast_job_update(job)
+        await notification_service.broadcast_job_update(
+            user_id=job.get('user_id'),
+            job_id=job_id,
+            status=job.get('status'),
+            data=job
+        )
 
 
 async def process_dubbing_job(job_id: str):
@@ -51,10 +57,18 @@ async def process_dubbing_job(job_id: str):
         source_video_id = job.get('source_video_id')
         user_id = job.get('user_id')
         video_url = f"https://www.youtube.com/watch?v={source_video_id}"
-        video_path, audio_path = await download_video(video_url)
+        video_path, audio_path, video_info = await download_video(video_url)
         
         print(f"[DUBBING] Downloaded video: {video_path}")
         print(f"[DUBBING] Downloaded audio: {audio_path}")
+        
+        # Log activity
+        firestore_service.log_activity(
+            user_id=user_id,
+            project_id=job.get('project_id'),
+            action="Downloaded source video",
+            details=f"Video ID: {source_video_id}"
+        )
         
         await update_job_status_and_notify(job_id, status='processing', progress=30)
         
@@ -126,6 +140,24 @@ async def process_dubbing_job(job_id: str):
                 
                 print(f"[DUBBING] Video public URL: {video_url_public}")
                 print(f"[DUBBING] Audio public URL: {audio_url_public}")
+
+                # Step 2a.1: Save localized audio to permanent storage for preview
+                # We do this so the UI can play the "Dubbed Audio" preview before Lip Sync
+                audio_filename = f"{source_video_id}_{language_code}_audio.mp3"
+                audio_storage_path = storage_service.upload_file(
+                    file_path=localized_audio_path,
+                    user_id=user_id,
+                    job_id=job_id,
+                    language_code=language_code,
+                    filename=audio_filename
+                )
+                
+                # Generate persistent URL for audio
+                base_url = getattr(settings, 'webhook_base_url', 'http://localhost:8000')
+                # Assuming upload_video puts it in a place accessible via get_storage_url or similar
+                # Since upload_video is specific to videos, we might want to check storage_service
+                # But for now we use what we have. If upload_video works for mp3, great.
+                dubbed_audio_url = storage_service.get_storage_url(audio_storage_path, base_url)
                 
                 # Step 2b: Process with Sync Labs using public URLs
                 result = await process_lip_sync(
@@ -166,14 +198,37 @@ async def process_dubbing_job(job_id: str):
                 if language_channel:
                     channel_id = language_channel.get('channel_id', '')
                 
+                # Prepare metadata
+                original_title = video_info.get('title', 'Untitled Video')
+                original_description = video_info.get('description', '')
+                thumbnail_url = video_info.get('thumbnail')
+                
+                # Simple "translation" for metadata (append language code)
+                # In a real app we would call an LLM or Translation API here
+                localized_title = f"{original_title} ({language_code})"
+                localized_description = f"Translated to {language_code}:\n\n{original_description}"
+
                 # Create localized video record with waiting_approval status
                 firestore_service.create_localized_video(
                     job_id=job_id,
+                    user_id=user_id,  # Added user_id
                     source_video_id=source_video_id,
                     language_code=language_code,
                     channel_id=channel_id,
                     status='waiting_approval',
-                    storage_url=storage_url
+                    storage_url=storage_url,
+                    dubbed_audio_url=dubbed_audio_url,
+                    thumbnail_url=thumbnail_url,
+                    title=localized_title,
+                    description=localized_description
+                )
+                
+                # Log activity
+                firestore_service.log_activity(
+                    user_id=user_id,
+                    project_id=job.get('project_id'),
+                    action="Processed video",
+                    details=f"Video localized for language {language_code}. Awaiting approval."
                 )
                 
                 processed_videos[language_code] = {
@@ -190,10 +245,20 @@ async def process_dubbing_job(job_id: str):
                 print(f"[DUBBING] Error processing {language_code}: {str(e)}")
                 firestore_service.create_localized_video(
                     job_id=job_id,
+                    user_id=user_id,  # Added user_id
                     source_video_id=source_video_id,
                     language_code=language_code,
                     channel_id='',  # Will be set when we get channel
                     status='failed'
+                )
+                
+                # Log activity
+                firestore_service.log_activity(
+                    user_id=user_id,
+                    project_id=job.get('project_id'),
+                    action="Processing failed",
+                    status="error",
+                    details=f"Failed to process language {language_code}: {str(e)}"
                 )
                 continue
         
@@ -230,6 +295,157 @@ async def process_dubbing_job(job_id: str):
         )
 
 
+async def simulate_dubbing_job(job_id: str):
+    """
+    Simulate a dubbing job processing for UI testing.
+    """
+    job = firestore_service.get_processing_job(job_id)
+    if not job:
+        return
+    
+    try:
+        user_id = job.get('user_id')
+        source_video_id = job.get('source_video_id')
+        target_languages = job.get('target_languages', [])
+        
+        print(f"[SIMULATION] Starting simulation for job {job_id}")
+        
+        # 1. Simulate Downloading (0-10%)
+        time_step = 0.5  # Seconds per step
+        await update_job_status_and_notify(job_id, status='downloading', progress=10)
+        await asyncio.sleep(time_step * 2)
+        
+        # 2. Simulate Processing (10-90%)
+        # Calculate steps based on languages
+        progress_per_lang = 80 / max(len(target_languages), 1)
+        current_progress = 10
+        
+        # Mock source video thumbnail
+        mock_thumbnail = f"https://i.ytimg.com/vi/{source_video_id}/hqdefault.jpg" if source_video_id else None
+        
+        for lang in target_languages:
+            # Simulate ElevenLabs & Veo processing time
+            await update_job_status_and_notify(job_id, status='processing', progress=int(current_progress))
+            await asyncio.sleep(time_step)
+            
+            current_progress += progress_per_lang / 2
+            await update_job_status_and_notify(job_id, progress=int(current_progress))
+            await asyncio.sleep(time_step)
+            
+            current_progress += progress_per_lang / 2
+            
+            # Create localized video record
+            language_name = lang.upper() # In real app we map code to name
+            
+            # Use mock storage URL
+            mock_storage_url = f"/storage/videos/mock_dub_{lang}_{uuid.uuid4().hex[:6]}.mp4"
+            
+            channel_id = ''
+            language_channel = firestore_service.get_language_channel_by_language(
+                user_id=user_id,
+                language_code=lang
+            )
+            if language_channel:
+                channel_id = language_channel.get('channel_id', '')
+                
+            firestore_service.create_localized_video(
+                job_id=job_id,
+                user_id=user_id,  # Added user_id
+                source_video_id=source_video_id,
+                language_code=lang,
+                channel_id=channel_id,
+                status='waiting_approval',
+                storage_url=mock_storage_url,
+                thumbnail_url=mock_thumbnail,
+                dubbed_audio_url=f"/storage/audios/mock_dub_{lang}_{uuid.uuid4().hex[:6]}.mp3",
+                title=f"Simulated Title {source_video_id} ({lang})",
+                description=f"This is a simulated translated description for language {lang}."
+            )
+            
+            # Log activity
+            firestore_service.log_activity(
+                user_id=user_id,
+                project_id=job.get('project_id'),
+                action="Processed video (Simulated)",
+                details=f"Video localized for language {lang}. Awaiting approval."
+            )
+            
+        # 3. Complete Processing -> Waiting Approval
+        await update_job_status_and_notify(job_id, status='waiting_approval', progress=90)
+        
+        await notification_service.broadcast_system_message(
+            user_id,
+            f"Job {job_id} (Simulated) ready for approval"
+        )
+        print(f"[SIMULATION] Job {job_id} waiting for approval")
+        
+    except Exception as e:
+        print(f"[SIMULATION] Error: {str(e)}")
+        await update_job_status_and_notify(job_id, status='failed', error_message=str(e))
+
+
+async def simulate_publishing(job_id: str):
+    """
+    Simulate publishing phase for simulation jobs.
+    """
+    job = firestore_service.get_processing_job(job_id)
+    if not job:
+        return
+        
+    user_id = job.get('user_id')
+    localized_videos = firestore_service.get_localized_videos_by_job_id(job_id)
+    
+    print(f"[SIMULATION] Starting publishing simulation for job {job_id}")
+    
+    # Update to uploading
+    await update_job_status_and_notify(job_id, status='uploading', progress=90)
+    
+    total_videos = len(localized_videos)
+    videos_processed = 0
+    
+    for vid in localized_videos:
+        if vid.get('status') != 'waiting_approval':
+            continue
+            
+        # Simulate upload time
+        await asyncio.sleep(1)
+        
+        # Update localized video status
+        firestore_service.update_localized_video(
+            vid['id'],
+            status='uploaded',
+            localized_video_id=f"sim_yt_{uuid.uuid4().hex[:10]}"
+        )
+        
+        # Log activity
+        firestore_service.log_activity(
+            user_id=user_id,
+            project_id=job.get('project_id'),
+            action="Published video (Simulated)",
+            status="success",
+            details=f"Video for {vid.get('language_code')} published to YouTube."
+        )
+        
+        videos_processed += 1
+        progress = 90 + int((videos_processed / total_videos) * 9)
+        await update_job_status_and_notify(job_id, progress=progress)
+        
+    # Complete
+    await update_job_status_and_notify(
+        job_id, 
+        status='completed', 
+        progress=100,
+        completed_at=datetime.utcnow()
+    )
+    
+    await notification_service.broadcast_system_message(
+        user_id,
+        f"Job {job_id} (Simulated) published successfully"
+    )
+    print(f"[SIMULATION] Job {job_id} publishing complete")
+    return {"success": True, "published_count": videos_processed}
+
+
 async def publish_dubbed_videos(job_id: str):
     """
     Publish processed videos to YouTube after approval.
@@ -238,6 +454,10 @@ async def publish_dubbed_videos(job_id: str):
         job = firestore_service.get_processing_job(job_id)
         if not job:
             raise ValueError(f"Job {job_id} not found")
+            
+        # Check for simulation flag
+        if job.get('is_simulation', False):
+            return await simulate_publishing(job_id)
         
         user_id = job.get('user_id')
         source_video_id = job.get('source_video_id')
@@ -329,6 +549,15 @@ async def publish_dubbed_videos(job_id: str):
                         video_record['id'],
                         status='uploaded',
                         localized_video_id=localized_video_id
+                    )
+                    
+                    # Log activity
+                    firestore_service.log_activity(
+                        user_id=user_id,
+                        project_id=job.get('project_id'),
+                        action="Published video",
+                        status="success",
+                        details=f"Video for {language_code} published to YouTube (ID: {localized_video_id})."
                     )
                     
                     success_count += 1

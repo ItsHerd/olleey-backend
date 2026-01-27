@@ -114,6 +114,8 @@ class YouTubeConnectionResponse(BaseModel):
     connected_at: datetime
     connection_type: Optional[str] = None  # "master" or "satellite" (language channel)
     master_connection_id: Optional[str] = None  # If satellite, the master connection ID
+    language_code: Optional[str] = None
+    language_name: Optional[str] = None
 
 
 class YouTubeConnectionListResponse(BaseModel):
@@ -125,10 +127,12 @@ class YouTubeConnectionListResponse(BaseModel):
 class UpdateConnectionRequest(BaseModel):
     """Request model for updating YouTube connection settings."""
     is_primary: Optional[bool] = None
+    language_code: Optional[str] = None
     
     class Config:
         json_schema_extra = {
             "example": {
-                "is_primary": True
+                "is_primary": True,
+                "language_code": "en"
             }
         }

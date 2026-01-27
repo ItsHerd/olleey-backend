@@ -13,10 +13,115 @@ from firebase_admin import auth
 
 from config import settings
 from schemas.auth import YouTubeConnectionResponse, YouTubeConnectionListResponse, UpdateConnectionRequest
+from schemas.channels import ChannelGraphResponse, YouTubeConnectionNode, LanguageChannelNode, ChannelNodeStatus
 from services.firestore import firestore_service
 from middleware.auth import get_current_user, get_optional_user
+from utils.languages import LANGUAGE_NAMES
 
 router = APIRouter(prefix="/youtube", tags=["youtube-connection"])
+
+
+def check_connection_status(connection: dict) -> ChannelNodeStatus:
+    """Check YouTube connection status based on token expiry."""
+    token_expiry = connection.get('token_expiry')
+    access_token = connection.get('access_token', '')
+    
+    if access_token.startswith('mock_'):
+        return ChannelNodeStatus(
+            status="active",
+            last_checked=datetime.utcnow(),
+            token_expires_at=None,
+            permissions=["youtube.upload", "youtube.readonly", "youtube.force-ssl"]
+        )
+    
+    if token_expiry:
+        if isinstance(token_expiry, datetime):
+            is_expired = token_expiry < datetime.utcnow()
+        elif hasattr(token_expiry, 'timestamp'):
+            is_expired = datetime.fromtimestamp(token_expiry.timestamp()) < datetime.utcnow()
+        else:
+            is_expired = False
+        
+        if is_expired:
+            return ChannelNodeStatus(
+                status="expired",
+                last_checked=datetime.utcnow(),
+                token_expires_at=token_expiry if isinstance(token_expiry, datetime) else datetime.fromtimestamp(token_expiry.timestamp()),
+                permissions=[]
+            )
+    
+    return ChannelNodeStatus(
+        status="active",
+        last_checked=datetime.utcnow(),
+        token_expires_at=token_expiry if isinstance(token_expiry, datetime) else (datetime.fromtimestamp(token_expiry.timestamp()) if hasattr(token_expiry, 'timestamp') else None),
+        permissions=["youtube.upload", "youtube.readonly", "youtube.force-ssl"]
+    )
+
+
+@router.get("/channel_graph", response_model=ChannelGraphResponse)
+async def get_channel_graph(
+    project_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+) -> ChannelGraphResponse:
+    """
+    Get channel relationship graph.
+    """
+    user_id = current_user["user_id"]
+    youtube_connections = firestore_service.get_youtube_connections(user_id)
+    language_channels = firestore_service.get_language_channels(user_id, project_id=project_id)
+    all_jobs, _ = firestore_service.list_processing_jobs(user_id, limit=1000, project_id=project_id)
+    
+    master_nodes = []
+    active_count = 0
+    expired_count = 0
+    
+    for conn in youtube_connections:
+        if conn.get('master_connection_id'):
+            continue  # Skip satellite connections
+        
+        status = check_connection_status(conn)
+        if status.status == "active":
+            active_count += 1
+        elif status.status == "expired":
+            expired_count += 1
+            
+        satellites = []
+        for channel in language_channels:
+            if channel.get('master_connection_id') == conn['connection_id']:
+                satellites.append(LanguageChannelNode(
+                    id=channel['id'],
+                    channel_id=channel['channel_id'],
+                    channel_name=channel.get('channel_name'),
+                    channel_avatar_url=channel.get('channel_avatar_url'),
+                    language_code=channel['language_code'],
+                    language_name=LANGUAGE_NAMES.get(channel['language_code'], channel['language_code'].upper()),
+                    created_at=channel.get('created_at', datetime.utcnow()),
+                    is_paused=channel.get('is_paused', False),
+                    status=status,
+                    videos_count=0
+                ))
+        
+        master_nodes.append(YouTubeConnectionNode(
+            connection_id=conn['connection_id'],
+            channel_id=conn['youtube_channel_id'],
+            channel_name=conn.get('youtube_channel_name', 'Unknown Channel'),
+            channel_avatar_url=conn.get('channel_avatar_url'),
+            is_primary=conn.get('is_primary', False),
+            connected_at=conn.get('created_at', datetime.utcnow()),
+            status=status,
+            language_channels=satellites,
+            language_code=conn.get('language_code'),
+            language_name=LANGUAGE_NAMES.get(conn.get('language_code', ''), conn.get('language_code', '').upper()) if conn.get('language_code') else None,
+            total_videos=0,
+            total_translations=len(satellites)
+        ))
+        
+    return ChannelGraphResponse(
+        master_nodes=master_nodes,
+        total_connections=len(master_nodes),
+        active_connections=active_count,
+        expired_connections=expired_count
+    )
 
 
 def get_youtube_oauth_flow() -> Flow:
@@ -509,6 +614,9 @@ async def youtube_connection_callback(
         return RedirectResponse(url=redirect_url, status_code=303)
 
 
+from utils.languages import LANGUAGE_NAMES
+
+
 @router.get("/connections", response_model=YouTubeConnectionListResponse)
 async def list_youtube_connections(
     current_user: dict = Depends(get_current_user)
@@ -538,6 +646,10 @@ async def list_youtube_connections(
         elif isinstance(connected_at, (int, float)):
             connected_at = datetime.fromtimestamp(connected_at)
         
+        # Get language data
+        lang_code = conn.get('language_code')
+        lang_name = LANGUAGE_NAMES.get(lang_code, lang_code.upper()) if lang_code else None
+        
         connection_responses.append(YouTubeConnectionResponse(
             connection_id=conn['connection_id'],
             youtube_channel_id=conn['youtube_channel_id'],
@@ -546,7 +658,9 @@ async def list_youtube_connections(
             is_primary=conn.get('is_primary', False),
             connected_at=connected_at or datetime.utcnow(),
             connection_type=connection_type,
-            master_connection_id=master_conn_id
+            master_connection_id=master_conn_id,
+            language_code=lang_code,
+            language_name=lang_name
         ))
     
     return YouTubeConnectionListResponse(
@@ -585,6 +699,8 @@ async def update_youtube_connection(
             detail="Connection not found or access denied"
         )
     
+    updates = {}
+    
     # Handle primary connection change
     if request.is_primary is not None:
         if request.is_primary:
@@ -596,7 +712,14 @@ async def update_youtube_connection(
                 )
         else:
             # Unset primary (but ensure at least one primary exists)
-            firestore_service.update_youtube_connection(connection_id, is_primary=False)
+            updates['is_primary'] = False
+            
+    # Handle language update
+    if request.language_code is not None:
+        updates['language_code'] = request.language_code
+        
+    if updates:
+        firestore_service.update_youtube_connection(connection_id, **updates)
     
     return {"message": "Connection updated successfully"}
 

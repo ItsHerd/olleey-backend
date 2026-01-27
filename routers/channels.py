@@ -16,21 +16,7 @@ from middleware.auth import get_current_user
 router = APIRouter(prefix="/channels", tags=["channels"])
 
 
-# Language name mapping
-LANGUAGE_NAMES = {
-    "en": "English",
-    "es": "Spanish",
-    "fr": "French",
-    "de": "German",
-    "it": "Italian",
-    "pt": "Portuguese",
-    "ja": "Japanese",
-    "ko": "Korean",
-    "zh": "Chinese",
-    "ar": "Arabic",
-    "hi": "Hindi",
-    "ru": "Russian"
-}
+from utils.languages import LANGUAGE_NAMES
 
 
 def check_connection_status(connection: dict) -> ChannelNodeStatus:
@@ -134,39 +120,31 @@ async def get_channel_graph(
             if lang_master_id != connection_id:
                 continue  # Skip language channels not associated with this master
             
-            # Get language codes (support both old and new format)
-            lang_codes = lang_ch.get('language_codes', [])
-            if not lang_codes and lang_ch.get('language_code'):
-                lang_codes = [lang_ch.get('language_code')]
-            
-            # Count videos for all languages in this channel
-            videos_for_lang = []
-            for lang_code in lang_codes:
-                videos_for_lang.extend([
-                    job for job in all_jobs
-                    if lang_code in job.get('target_languages', [])
-                    and job.get('status') == 'completed'
-                ])
-            # Remove duplicates by job_id
-            unique_videos = {job.get('id'): job for job in videos_for_lang}.values()
-            
-            # Get language names
-            language_names = [LANGUAGE_NAMES.get(lc, lc.upper()) for lc in lang_codes]
+            # Get language code
+            lang_code = lang_ch.get('language_code', '')
+            lang_name = LANGUAGE_NAMES.get(lang_code, lang_code.upper()) if lang_code else None
             
             created_at = lang_ch.get('created_at')
             if hasattr(created_at, 'timestamp'):
                 created_at = datetime.fromtimestamp(created_at.timestamp())
             elif isinstance(created_at, (int, float)):
                 created_at = datetime.fromtimestamp(created_at)
+                
+            # Count videos for this language
+            videos_for_lang = [
+                job for job in all_jobs
+                if lang_code in job.get('target_languages', [])
+                and job.get('status') == 'completed'
+            ]
+            unique_videos_count = len({job.get('id'): job for job in videos_for_lang})
             
             satellite_nodes.append(LanguageChannelNode(
                 id=lang_ch.get('id', ''),
                 channel_id=lang_ch.get('channel_id', ''),
                 channel_name=lang_ch.get('channel_name'),
                 channel_avatar_url=lang_ch.get('channel_avatar_url'),
-                language_code=lang_ch.get('language_code'),  # For backward compatibility (first language)
-                language_codes=lang_codes,
-                language_names=language_names,
+                language_code=lang_code,
+                language_name=lang_name,
                 created_at=created_at or datetime.utcnow(),
                 is_paused=lang_ch.get('is_paused', False),
                 status=ChannelNodeStatus(
@@ -175,7 +153,7 @@ async def get_channel_graph(
                     token_expires_at=None,
                     permissions=["youtube.upload"]
                 ),
-                videos_count=len(unique_videos),
+                videos_count=unique_videos_count,
                 last_upload=None
             ))
         
@@ -189,6 +167,10 @@ async def get_channel_graph(
         elif isinstance(connected_at, (int, float)):
             connected_at = datetime.fromtimestamp(connected_at)
         
+        # Get language for master connection
+        conn_lang_code = conn.get('language_code')
+        conn_lang_name = LANGUAGE_NAMES.get(conn_lang_code, conn_lang_code.upper()) if conn_lang_code else None
+        
         master_nodes.append(YouTubeConnectionNode(
             connection_id=connection_id,
             channel_id=conn.get('youtube_channel_id', ''),
@@ -198,6 +180,8 @@ async def get_channel_graph(
             connected_at=connected_at or datetime.utcnow(),
             status=status,
             language_channels=satellite_nodes,
+            language_code=conn_lang_code,
+            language_name=conn_lang_name,
             total_videos=len(all_jobs),
             total_translations=total_translations
         ))
@@ -339,18 +323,13 @@ async def create_channel(
                 # Use the master_connection_id from the YouTube connection
                 master_connection_id = master_conn_id
         
-        # Validate language codes
-        if not request.language_codes and not request.language_code:
+        # Validate language code
+        if not request.language_code:
             raise HTTPException(
                 status_code=400,
-                detail="Either language_code or language_codes must be provided"
+                detail="language_code must be provided"
             )
-        
-        # Normalize to language_codes list
-        language_codes = request.language_codes or []
-        if request.language_code:
-            if request.language_code not in language_codes:
-                language_codes = [request.language_code] + language_codes
+        language_code = request.language_code
         
         # Check if channel already exists for this channel_id
         existing_channels = firestore_service.get_language_channels(user_id)
@@ -372,8 +351,7 @@ async def create_channel(
                 firestore_service.update_language_channel(
                     request.channel_id,
                     user_id,
-                    language_code=request.language_code,  # For backward compatibility
-                    language_codes=language_codes,
+                    language_code=request.language_code,
                     channel_name=request.channel_name,
                     channel_avatar_url=channel_avatar_url,
                     master_connection_id=master_connection_id  # Reassign to master
@@ -399,16 +377,15 @@ async def create_channel(
                 elif isinstance(created_at, (int, float)):
                     created_at = datetime.fromtimestamp(created_at)
                 
-                # Get language codes
-                updated_language_codes = updated_channel.get('language_codes', [])
-                if not updated_language_codes and updated_channel.get('language_code'):
-                    updated_language_codes = [updated_channel.get('language_code')]
+                # Get language data
+                updated_lang_code = updated_channel.get('language_code', '')
+                updated_lang_name = LANGUAGE_NAMES.get(updated_lang_code, updated_lang_code.upper()) if updated_lang_code else None
                 
                 return LanguageChannelResponse(
                     id=updated_channel['id'],
                     channel_id=updated_channel.get('channel_id'),
-                    language_code=updated_channel.get('language_code'),
-                    language_codes=updated_language_codes,
+                    language_code=updated_lang_code,
+                    language_name=updated_lang_name,
                     channel_name=updated_channel.get('channel_name'),
                     channel_avatar_url=updated_channel.get('channel_avatar_url'),
                     is_paused=updated_channel.get('is_paused', False),
@@ -426,8 +403,7 @@ async def create_channel(
         channel_id = firestore_service.create_language_channel(
             user_id=user_id,
             channel_id=request.channel_id,
-            language_code=request.language_code,  # For backward compatibility
-            language_codes=language_codes,
+            language_code=request.language_code,
             channel_name=request.channel_name,
             channel_avatar_url=channel_avatar_url,
             master_connection_id=master_connection_id,  # Associate with master
@@ -454,16 +430,15 @@ async def create_channel(
         elif isinstance(created_at, (int, float)):
             created_at = datetime.fromtimestamp(created_at)
         
-        # Get language codes (support both old and new format)
-        language_codes = channel.get('language_codes', [])
-        if not language_codes and channel.get('language_code'):
-            language_codes = [channel.get('language_code')]
+        # Get language data
+        lang_code = channel.get('language_code', '')
+        lang_name = LANGUAGE_NAMES.get(lang_code, lang_code.upper()) if lang_code else None
         
         return LanguageChannelResponse(
             id=channel['id'],
             channel_id=channel.get('channel_id'),
-            language_code=channel.get('language_code'),  # For backward compatibility
-            language_codes=language_codes,
+            language_code=lang_code,
+            language_name=lang_name,
             channel_name=channel.get('channel_name'),
             channel_avatar_url=channel.get('channel_avatar_url'),
             is_paused=channel.get('is_paused', False),

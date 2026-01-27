@@ -49,11 +49,13 @@ async def download_video(video_url: str, output_dir: Optional[str] = None) -> tu
     
     video_path = None
     audio_path = None
-    
+    info_dict = None
+
     def download():
-        nonlocal video_path, audio_path
+        nonlocal video_path, audio_path, info_dict
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
+            info_dict = info
             video_id = info.get('id', 'video')
             
             # Find downloaded files
@@ -78,4 +80,4 @@ async def download_video(video_url: str, output_dir: Optional[str] = None) -> tu
         # In production, you might want to extract audio using ffmpeg
         audio_path = video_path
     
-    return video_path, audio_path
+    return video_path, audio_path, info_dict

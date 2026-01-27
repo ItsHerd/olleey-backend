@@ -23,10 +23,45 @@ class StorageService:
         self.videos_dir = os.path.join(self.storage_dir, 'videos')
         os.makedirs(self.videos_dir, exist_ok=True)
     
+    def upload_file(self, file_path: str, user_id: str, job_id: str,
+                   language_code: str, filename: Optional[str] = None) -> str:
+        """
+        Copy processed file to local storage.
+        
+        Args:
+            file_path: Local path to file
+            user_id: User ID
+            job_id: Processing job ID
+            language_code: Language code
+            filename: Storage filename (if None, uses original filename or uuid)
+            
+        Returns:
+            str: Relative path to stored file
+        """
+        # Create directory structure: videos/{user_id}/{job_id}/{language_code}/
+        # We stick to videos_dir for now as the main storage root for job assets
+        user_dir = os.path.join(self.videos_dir, user_id)
+        job_dir = os.path.join(user_dir, job_id)
+        lang_dir = os.path.join(job_dir, language_code)
+        os.makedirs(lang_dir, exist_ok=True)
+        
+        # Generate filename if not provided
+        if not filename:
+            filename = os.path.basename(file_path)
+            
+        dest_path = os.path.join(lang_dir, filename)
+        
+        # Copy file to storage
+        shutil.copy2(file_path, dest_path)
+        
+        # Return relative path from storage root
+        return os.path.relpath(dest_path, self.storage_dir).replace('\\', '/')
+
     def upload_video(self, file_path: str, user_id: str, job_id: str, 
                     language_code: str, video_id: Optional[str] = None) -> str:
         """
         Copy processed video to local storage.
+        Wrapper around upload_file that enforces .mp4 extension for backward compatibility.
         
         Args:
             file_path: Local path to video file
@@ -38,21 +73,8 @@ class StorageService:
         Returns:
             str: Relative path to stored video file
         """
-        # Create directory structure: videos/{user_id}/{job_id}/{language_code}/
-        user_dir = os.path.join(self.videos_dir, user_id)
-        job_dir = os.path.join(user_dir, job_id)
-        lang_dir = os.path.join(job_dir, language_code)
-        os.makedirs(lang_dir, exist_ok=True)
-        
-        # Generate filename
         filename = f"{video_id or uuid.uuid4()}.mp4"
-        dest_path = os.path.join(lang_dir, filename)
-        
-        # Copy file to storage
-        shutil.copy2(file_path, dest_path)
-        
-        # Return relative path from storage root
-        return os.path.relpath(dest_path, self.storage_dir).replace('\\', '/')
+        return self.upload_file(file_path, user_id, job_id, language_code, filename)
     
     def upload_video_from_bytes(self, video_data: bytes, user_id: str, job_id: str,
                                language_code: str, video_id: Optional[str] = None) -> str:

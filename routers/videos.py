@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from services.firestore import firestore_service
 from schemas.videos import (
     VideoListResponse, VideoItem, VideoUploadRequest, VideoUploadResponse,
-    SubscriptionRequest, SubscriptionResponse, UnsubscribeRequest
+    SubscriptionRequest, SubscriptionResponse, UnsubscribeRequest, LocalizationStatus
 )
 from routers.youtube_auth import get_youtube_service as get_youtube_service_helper
 from middleware.auth import get_current_user
@@ -38,7 +38,8 @@ async def get_mock_videos(user_id: str, limit: int) -> VideoListResponse:
             "channel_id": "UCmock1234567890abcdefgh",
             "channel_name": "Test Main Channel",
             "thumbnail_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
-            "published_at": "2009-10-24T09:00:00Z"
+            "published_at": "2009-10-24T09:00:00Z",
+            "view_count": 1200000000
         },
         {
             "video_id": "9bZkp7q19f0",
@@ -46,198 +47,97 @@ async def get_mock_videos(user_id: str, limit: int) -> VideoListResponse:
             "channel_id": "UCmock1234567890abcdefgh",
             "channel_name": "Test Main Channel",
             "thumbnail_url": "https://i.ytimg.com/vi/9bZkp7q19f0/hqdefault.jpg",
-            "published_at": "2012-07-15T00:00:00Z"
-        },
-        {
-            "video_id": "kJQP7kiw5Fk",
-            "title": "Luis Fonsi - Despacito ft. Daddy Yankee",
-            "channel_id": "UCmock1234567890abcdefgh",
-            "channel_name": "Test Main Channel",
-            "thumbnail_url": "https://i.ytimg.com/vi/kJQP7kiw5Fk/hqdefault.jpg",
-            "published_at": "2017-01-12T00:00:00Z"
-        },
-        {
-            "video_id": "OPf0YbXqDm0",
-            "title": "Mark Ronson - Uptown Funk (Official Video) ft. Bruno Mars",
-            "channel_id": "UCmock1234567890abcdefgh",
-            "channel_name": "Test Main Channel",
-            "thumbnail_url": "https://i.ytimg.com/vi/OPf0YbXqDm0/hqdefault.jpg",
-            "published_at": "2014-11-19T00:00:00Z"
-        },
-        {
-            "video_id": "hT_nvWreIhg",
-            "title": "OneRepublic - Counting Stars (Official Music Video)",
-            "channel_id": "UCmock1234567890abcdefgh",
-            "channel_name": "Test Main Channel",
-            "thumbnail_url": "https://i.ytimg.com/vi/hT_nvWreIhg/hqdefault.jpg",
-            "published_at": "2013-05-31T00:00:00Z"
-        },
-        # Translated videos (published to language channels)
-        {
-            "video_id": "mock_dQw4w9WgXcQ_it",
-            "title": "Never Gonna Give You Up - Rick Astley (Italian Dub)",
-            "channel_id": "UCmock_italian_999",
-            "channel_name": "Italian Dubbing Channel",
-            "thumbnail_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
-            "published_at": "2026-01-19T00:00:00Z"
-        },
-        {
-            "video_id": "mock_dQw4w9WgXcQ_zh",
-            "title": "Never Gonna Give You Up - Rick Astley (Chinese Dub)",
-            "channel_id": "UCmock_chinese_888",
-            "channel_name": "Chinese Dubbing Channel",
-            "thumbnail_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
-            "published_at": "2026-01-19T00:00:00Z"
+            "published_at": "2012-07-15T00:00:00Z",
+            "view_count": 4500000000
         }
     ]
     
     # Limit results
     mock_videos_data = mock_videos_data[:limit]
     
-    # Query Firestore to determine which videos are original vs translated
-    # Wrap in try-except to ensure videos always appear even if Firestore fails
     videos = []
     for mock_video in mock_videos_data:
         video_id = mock_video["video_id"]
         
-        try:
-            # Check if this is a translated video
-            localized = firestore_service.get_localized_video_by_localized_id(video_id, user_id)
-            
-            if localized:
-                # This is a translated video
-                video_item = VideoItem(
-                    video_id=video_id,
-                    title=mock_video["title"],
-                    thumbnail_url=mock_video["thumbnail_url"],
-                    published_at=datetime.fromisoformat(mock_video["published_at"].replace('Z', '+00:00')),
-                    channel_id=mock_video["channel_id"],
-                    channel_name=mock_video["channel_name"],
-                    video_type="translated",
-                    source_video_id=localized.get('source_video_id'),
-                    translated_languages=[]
-                )
-            else:
-                # Check if this is an original video with translations
-                localized_list = firestore_service.get_localized_videos_by_source_id(video_id, user_id)
-                
-                if localized_list:
-                    # Original video with translations
-                    translated_languages = [
-                        loc.get('language_code')
-                        for loc in localized_list
-                        if loc.get('language_code')
-                    ]
-                    video_item = VideoItem(
-                        video_id=video_id,
-                        title=mock_video["title"],
-                        thumbnail_url=mock_video["thumbnail_url"],
-                        published_at=datetime.fromisoformat(mock_video["published_at"].replace('Z', '+00:00')),
-                        channel_id=mock_video["channel_id"],
-                        channel_name=mock_video["channel_name"],
-                        video_type="original",
-                        source_video_id=None,
-                        translated_languages=translated_languages
-                    )
-                else:
-                    # Original video without translations
-                    video_item = VideoItem(
-                        video_id=video_id,
-                        title=mock_video["title"],
-                        thumbnail_url=mock_video["thumbnail_url"],
-                        published_at=datetime.fromisoformat(mock_video["published_at"].replace('Z', '+00:00')),
-                        channel_id=mock_video["channel_id"],
-                        channel_name=mock_video["channel_name"],
-                        video_type="original",
-                        source_video_id=None,
-                        translated_languages=[]
-                    )
-        except Exception as e:
-            # If Firestore query fails, still return the video as original
-            print(f"[VIDEOS] Firestore query failed for video {video_id}, returning as original: {str(e)}")
-            video_item = VideoItem(
-                video_id=video_id,
-                title=mock_video["title"],
-                thumbnail_url=mock_video["thumbnail_url"],
-                published_at=datetime.fromisoformat(mock_video["published_at"].replace('Z', '+00:00')),
-                channel_id=mock_video["channel_id"],
-                channel_name=mock_video["channel_name"],
-                video_type="original",
-                source_video_id=None,
-                translated_languages=[]
-            )
-        
+        video_item = VideoItem(
+            video_id=video_id,
+            title=mock_video["title"],
+            thumbnail_url=mock_video["thumbnail_url"],
+            published_at=datetime.fromisoformat(mock_video["published_at"].replace('Z', '+00:00')),
+            view_count=mock_video.get("view_count", 0),
+            channel_id=mock_video["channel_id"],
+            channel_name=mock_video["channel_name"],
+            video_type="original",
+            source_video_id=None,
+            localizations=[],
+            translated_languages=[]
+        )
         videos.append(video_item)
     
-    # Sort by published_at descending
-    videos.sort(key=lambda x: x.published_at, reverse=True)
-    
-    print(f"[VIDEOS] Returning {len(videos)} mock videos for user {user_id}")
     return VideoListResponse(videos=videos, total=len(videos))
 
 
 def get_youtube_service(user_id: str, connection_id=None, raise_on_mock=True):
     """
-    Build and return YouTube Data API v3 service with user's connected channel credentials.
-    
-    Args:
-        user_id: Firebase Auth user ID
-        connection_id: Optional connection ID
-        raise_on_mock: If False, returns None for mock credentials
-        
-    Returns:
-        YouTube service instance or None if mock credentials
-        
-    Raises:
-        HTTPException: If authentication fails or no YouTube connection
+    Build and return YouTube Data API v3 service.
     """
     return get_youtube_service_helper(user_id, connection_id, raise_on_mock)
 
-
 @router.get("/list", response_model=VideoListResponse)
 async def list_videos(
-    limit: int = 10,
+    limit: int = 20,
+    project_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
+    video_type: str = "all", # all, original, translated
     current_user: dict = Depends(get_current_user)
 ) -> VideoListResponse:
     """
-    Fetch authenticated user's uploaded videos from YouTube.
-    
-    Args:
-        limit: Maximum number of videos to return (default: 10)
-        current_user: Current authenticated user from Firebase Auth token
-        
-    Returns:
-        VideoListResponse: List of user's videos sorted by date
-        
-    Raises:
-        HTTPException: If authentication fails or API error occurs
+    Fetch authenticated user's uploaded videos from YouTube with filtering.
     """
     user_id = current_user["user_id"]
     
     try:
-        # Get YouTube service in thread pool to avoid blocking
-        # Pass raise_on_mock=False to gracefully handle mock credentials
+        # Get YouTube service
         youtube = await asyncio.to_thread(get_youtube_service, user_id, None, False)
         
         if youtube is None:
-            # Mock or invalid credentials - return mock video data for development/testing
-            print(f"[VIDEOS] Mock credentials detected for user {user_id}, returning mock video data")
-            return await get_mock_videos(user_id, limit)
+            # Handle mock mode
+            mock_resp = await get_mock_videos(user_id, limit)
+            # Apply filters to mock data
+            filtered_videos = mock_resp.videos
+            if video_type != "all":
+                filtered_videos = [v for v in filtered_videos if v.video_type == video_type]
+            if channel_id:
+                filtered_videos = [v for v in filtered_videos if v.channel_id == channel_id]
+            # No project filtering for mock for now
+            return VideoListResponse(videos=filtered_videos, total=len(filtered_videos))
         
-        # Get user's channel to find uploads playlist
-        channels_response = await asyncio.to_thread(
-            youtube.channels().list(part='contentDetails', mine=True).execute
-        )
-        
-        if not channels_response.get('items'):
-            return VideoListResponse(videos=[], total=0)
-        
-        uploads_playlist_id = channels_response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
-        
+        # Determine which playlist to fetch from
+        if channel_id:
+            # Fetch specifically for a channel
+            target_channel_id = channel_id
+        else:
+            # Fetch for primary channel
+            channels_response = await asyncio.to_thread(
+                youtube.channels().list(part='contentDetails', mine=True).execute
+            )
+            if not channels_response.get('items'):
+                return VideoListResponse(videos=[], total=0)
+            target_channel_id = channels_response['items'][0]['id']
+            uploads_playlist_id = channels_response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
+        # If we have a specific channel_id, we need to get its uploads_playlist_id
+        if channel_id:
+             channels_response = await asyncio.to_thread(
+                youtube.channels().list(part='contentDetails', id=channel_id).execute
+            )
+             if not channels_response.get('items'):
+                return VideoListResponse(videos=[], total=0)
+             uploads_playlist_id = channels_response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
         # Get videos from uploads playlist
         playlist_items = []
         next_page_token = None
-        
         while len(playlist_items) < limit:
             request_params = {
                 'part': 'snippet,contentDetails',
@@ -250,117 +150,97 @@ async def list_videos(
             playlist_response = await asyncio.to_thread(
                 youtube.playlistItems().list(**request_params).execute
             )
-            
             playlist_items.extend(playlist_response.get('items', []))
             next_page_token = playlist_response.get('nextPageToken')
-            
             if not next_page_token:
                 break
         
         if not playlist_items:
             return VideoListResponse(videos=[], total=0)
         
-        # Get video IDs
         video_ids = [item['contentDetails']['videoId'] for item in playlist_items[:limit]]
         
-        # Get full video details
+        # Get full video details INCLUDING statistics (views)
         videos_response = await asyncio.to_thread(
             youtube.videos().list(
-                part='snippet',
+                part='snippet,statistics,contentDetails',
                 id=','.join(video_ids)
             ).execute
         )
         
-        # Map to VideoItem schema
-        videos = []
-        video_ids = [video['id'] for video in videos_response.get('items', [])]
+        # Fetch status data from Firestore
+        all_localized = firestore_service.get_all_localized_videos_for_user(user_id)
+        all_jobs, _ = firestore_service.list_processing_jobs(user_id, limit=100, project_id=project_id)
         
-        # Optimize: Fetch ALL localized videos for the user in one go (or via batch if implemented)
-        # This replaces the N+1 query loop.
-        all_user_localized_videos = firestore_service.get_all_localized_videos_for_user(user_id)
+        # Maps for quick lookup
+        localized_map = defaultdict(list) # source_id -> [localized_docs]
+        for loc in all_localized:
+            if loc.get('source_video_id'):
+                localized_map[loc['source_video_id']].append(loc)
         
-        localized_videos_map = {}  # localized_video_id -> localized_video_data
-        source_videos_map = defaultdict(list)  # source_video_id -> list of localized_videos
+        jobs_map = defaultdict(list) # source_id -> [job_docs]
+        for j in all_jobs:
+            if j.get('source_video_id'):
+                jobs_map[j['source_video_id']].append(j)
         
-        # Populate maps from the bulk fetched data
-        for loc_video in all_user_localized_videos:
-            # Map by localized_video_id
-            if loc_video.get('localized_video_id'):
-                localized_videos_map[loc_video['localized_video_id']] = loc_video
-                
-            # Map by source_video_id
-            if loc_video.get('source_video_id'):
-                source_videos_map[loc_video['source_video_id']].append(loc_video)
-        
-        # Build video items with type information
+        final_videos = []
         for video in videos_response.get('items', []):
-            snippet = video['snippet']
-            thumbnails = snippet.get('thumbnails', {})
-            thumbnail_url = (
-                thumbnails.get('high', {}).get('url') or
-                thumbnails.get('medium', {}).get('url') or
-                thumbnails.get('default', {}).get('url') or
-                ''
-            )
-            
             video_id = video['id']
-            channel_id = snippet.get('channelId', '')
-            channel_name = snippet.get('channelTitle', '')
+            snippet = video['snippet']
+            stats = video.get('statistics', {})
             
-            # Determine video type
-            if video_id in localized_videos_map:
-                # This is a translated video
-                localized_data = localized_videos_map[video_id]
-                video_item = VideoItem(
-                    video_id=video_id,
-                    title=snippet.get('title', ''),
-                    thumbnail_url=thumbnail_url,
-                    published_at=snippet.get('publishedAt'),
-                    channel_id=channel_id,
-                    channel_name=channel_name,
-                    video_type="translated",
-                    source_video_id=localized_data.get('source_video_id'),
-                    translated_languages=[]
-                )
-            elif video_id in source_videos_map:
-                # This is an original video that has been translated
-                localized_list = source_videos_map[video_id]
-                translated_languages = [
-                    loc.get('language_code') 
-                    for loc in localized_list 
-                    if loc.get('language_code')
-                ]
-                video_item = VideoItem(
-                    video_id=video_id,
-                    title=snippet.get('title', ''),
-                    thumbnail_url=thumbnail_url,
-                    published_at=snippet.get('publishedAt'),
-                    channel_id=channel_id,
-                    channel_name=channel_name,
-                    video_type="original",
-                    source_video_id=None,
-                    translated_languages=translated_languages
-                )
-            else:
-                # This is an original video that hasn't been translated yet
-                video_item = VideoItem(
-                    video_id=video_id,
-                    title=snippet.get('title', ''),
-                    thumbnail_url=thumbnail_url,
-                    published_at=snippet.get('publishedAt'),
-                    channel_id=channel_id,
-                    channel_name=channel_name,
-                    video_type="original",
-                    source_video_id=None,
-                    translated_languages=[]
-                )
+            # Determine type and localizations
+            localizations = []
             
-            videos.append(video_item)
-        
-        # Sort by published_at descending (most recent first)
-        videos.sort(key=lambda x: x.published_at, reverse=True)
-        
-        return VideoListResponse(videos=videos, total=len(videos))
+            # 1. Check if it IS a localized video
+            is_localized = any(loc.get('localized_video_id') == video_id for loc in all_localized)
+            type_str = "translated" if is_localized else "original"
+            
+            # 2. Get localizations for this original video
+            for loc in localized_map.get(video_id, []):
+                localizations.append(LocalizationStatus(
+                    language_code=loc.get('language_code', ''),
+                    status=loc.get('status', 'live'),
+                    video_id=loc.get('localized_video_id'),
+                    job_id=loc.get('job_id')
+                ))
+            
+            # 3. Add in-progress jobs to localizations
+            for j in jobs_map.get(video_id, []):
+                # Filter out languages already covered by 'live' localizations to avoid duplicates
+                live_langs = [l.language_code for l in localizations]
+                for lang in j.get('target_languages', []):
+                    if lang not in live_langs:
+                        localizations.append(LocalizationStatus(
+                            language_code=lang,
+                            status='processing', # mapping pending/processing to processing
+                            job_id=j.get('id')
+                        ))
+            
+            # Filter by type if requested
+            if video_type != "all" and type_str != video_type:
+                continue
+            
+            # Thumbnails
+            thumbnails = snippet.get('thumbnails', {})
+            thumb_url = thumbnails.get('high', {}).get('url') or thumbnails.get('default', {}).get('url', '')
+
+            video_item = VideoItem(
+                video_id=video_id,
+                title=snippet.get('title', ''),
+                thumbnail_url=thumb_url,
+                published_at=snippet.get('publishedAt'),
+                view_count=int(stats.get('viewCount', 0)),
+                channel_id=snippet.get('channelId', ''),
+                channel_name=snippet.get('channelTitle', ''),
+                video_type=type_str,
+                source_video_id=next((loc.get('source_video_id') for loc in all_localized if loc.get('localized_video_id') == video_id), None),
+                localizations=localizations,
+                translated_languages=[l.language_code for l in localizations]
+            )
+            final_videos.append(video_item)
+            
+        return VideoListResponse(videos=final_videos, total=len(final_videos))
         
     except HttpError as e:
         error_reason = e.error_details[0].get('reason', '') if e.error_details else ''
@@ -592,6 +472,16 @@ async def upload_video(
             privacy_status=privacy_status
         )
         
+        # Log activity
+        firestore_service.log_activity(
+            user_id=user_id,
+            project_id=None,  # No project context here usually
+            action="Uploaded video",
+            details=f"Video '{title}' uploaded to YouTube with ID {video_id}."
+        )
+        
+        return response
+        
     except HttpError as e:
         error_reason = e.error_details[0].get('reason', '') if e.error_details else ''
         if e.resp.status == 403 and 'quotaExceeded' in error_reason:
@@ -705,6 +595,16 @@ async def subscribe_to_channel(
             expires_at=expires_at,
             message="Subscription created successfully. Awaiting verification from PubSubHubbub hub."
         )
+        
+        # Log activity
+        firestore_service.log_activity(
+            user_id=user_id,
+            project_id=None,
+            action="Created subscription",
+            details=f"Subscribed to channel {request.channel_id} via PubSubHubbub."
+        )
+        
+        return response
         
     except httpx.HTTPError as e:
         raise HTTPException(

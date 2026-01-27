@@ -106,8 +106,7 @@ class FirestoreService:
             'updated_at': firestore_admin.SERVER_TIMESTAMP
         }
         doc_ref.set(data, merge=True)
-        if not doc_ref.get().exists:
-            doc_ref.update({'created_at': firestore_admin.SERVER_TIMESTAMP})
+        # Removed redundant .get() check for efficiency
         return {'user_id': user_id, **data}
     
     # Subscription operations
@@ -222,9 +221,43 @@ class FirestoreService:
         """Delete a project."""
         self.db.collection('projects').document(project_id).delete()
 
+    # Activity Log operations
+    def log_activity(self, user_id: str, project_id: Optional[str], action: str, 
+                     status: str = 'info', details: Optional[str] = None) -> str:
+        """Create a project-specific activity log entry."""
+        log_id = str(uuid.uuid4())
+        doc_ref = self.db.collection('activity_logs').document(log_id)
+        doc_ref.set({
+            'user_id': user_id,
+            'project_id': project_id,
+            'action': action,
+            'status': status,  # info, success, warning, error
+            'details': details,
+            'timestamp': firestore_admin.SERVER_TIMESTAMP
+        })
+        return log_id
+
+    def list_activity_logs(self, user_id: str, project_id: Optional[str] = None, 
+                           limit: int = 50) -> List[Dict[str, Any]]:
+        """List activity logs for a user or specific project."""
+        query = self._where(self.db.collection('activity_logs'), 'user_id', '==', user_id)
+        if project_id:
+            query = self._where(query, 'project_id', '==', project_id)
+        
+        # Sort by timestamp descending
+        docs = query.order_by('timestamp', direction=firestore_admin.Query.DESCENDING).limit(limit).stream()
+        
+        logs = []
+        for doc in docs:
+            data = doc.to_dict()
+            data['id'] = doc.id
+            logs.append(data)
+        return logs
+
     # Processing Job operations
     def create_processing_job(self, source_video_id: str, source_channel_id: str,
-                            user_id: str, target_languages: List[str], project_id: Optional[str] = None) -> str:
+                            user_id: str, target_languages: List[str], project_id: Optional[str] = None,
+                            is_simulation: bool = False) -> str:
         """Create processing job."""
         job_id = str(uuid.uuid4())
         doc_ref = self.db.collection('processing_jobs').document(job_id)
@@ -236,6 +269,7 @@ class FirestoreService:
             'status': 'pending',
             'target_languages': target_languages,
             'progress': 0,
+            'is_simulation': is_simulation,
             'created_at': firestore_admin.SERVER_TIMESTAMP,
             'updated_at': firestore_admin.SERVER_TIMESTAMP
         })
@@ -301,29 +335,12 @@ class FirestoreService:
     
     # Language Channel operations
     def create_language_channel(self, user_id: str, channel_id: str,
-                               language_code: Optional[str] = None,
-                               language_codes: Optional[List[str]] = None,
+                               language_code: str,
                                channel_name: Optional[str] = None,
                                channel_avatar_url: Optional[str] = None,
                                master_connection_id: Optional[str] = None,
                                project_id: Optional[str] = None) -> str:
-        """Create language channel.
-        
-        Supports both single language (language_code) and multiple languages (language_codes).
-        If both are provided, language_codes takes precedence.
-        If master_connection_id is provided, associate this language channel
-        with the specified master YouTube connection.
-        """
-        # Normalize to language_codes list
-        if language_codes:
-            final_language_codes = language_codes
-            # Keep language_code for backward compatibility if it's not in the list
-            if language_code and language_code not in language_codes:
-                final_language_codes = [language_code] + language_codes
-        elif language_code:
-            final_language_codes = [language_code]
-        else:
-            raise ValueError("Either language_code or language_codes must be provided")
+        """Create language channel with a single associated language."""
         
         channel_doc_id = str(uuid.uuid4())
         doc_ref = self.db.collection('language_channels').document(channel_doc_id)
@@ -331,8 +348,7 @@ class FirestoreService:
             'user_id': user_id,
             'project_id': project_id,
             'channel_id': channel_id,
-            'language_code': language_code,  # Keep for backward compatibility
-            'language_codes': final_language_codes,  # Store as list
+            'language_code': language_code,
             'channel_name': channel_name,
             'channel_avatar_url': channel_avatar_url,
             'master_connection_id': master_connection_id,  # Associate with master
@@ -388,10 +404,12 @@ class FirestoreService:
     
     # Localized Video operations
     def create_localized_video(self, job_id: str, source_video_id: str,
-                              language_code: str, channel_id: str,
+                               language_code: str, channel_id: str,
+                               user_id: Optional[str] = None,
                               localized_video_id: Optional[str] = None,
                               status: str = 'pending',
                               storage_url: Optional[str] = None,
+                              dubbed_audio_url: Optional[str] = None,
                               thumbnail_url: Optional[str] = None,
                               title: Optional[str] = None,
                               description: Optional[str] = None) -> str:
@@ -400,12 +418,14 @@ class FirestoreService:
         doc_ref = self.db.collection('localized_videos').document(video_id)
         doc_ref.set({
             'job_id': job_id,
+            'user_id': user_id,
             'source_video_id': source_video_id,
             'localized_video_id': localized_video_id,
             'language_code': language_code,
             'channel_id': channel_id,
             'status': status,
             'storage_url': storage_url,  # URL to video in cloud storage
+            'dubbed_audio_url': dubbed_audio_url,  # URL to dubbed audio preview
             'thumbnail_url': thumbnail_url,  # Thumbnail for preview
             'title': title,  # Translated title
             'description': description,  # Translated description
@@ -425,13 +445,26 @@ class FirestoreService:
             self.db.collection('localized_videos'),
             'localized_video_id', '==', localized_video_id
         )
+        # Optimized: Filter by user_id if possible (for new records)
+        query = self._where(query, 'user_id', '==', user_id)
+        
         docs = query.stream()
         for doc in docs:
             data = doc.to_dict()
-            # Verify it belongs to a job owned by this user
-            job = self.get_processing_job(data.get('job_id'))
-            if job and job.get('user_id') == user_id:
-                return {'id': doc.id, **data}
+            return {'id': doc.id, **data}
+            
+        # Fallback for old records without user_id (expensive loop)
+        # We can remove this once data is backfilled
+        query_legacy = self._where(
+            self.db.collection('localized_videos'),
+            'localized_video_id', '==', localized_video_id
+        )
+        for doc in query_legacy.stream():
+            data = doc.to_dict()
+            if not data.get('user_id'):
+                job = self.get_processing_job(data.get('job_id'))
+                if job and job.get('user_id') == user_id:
+                    return {'id': doc.id, **data}
         return None
     
     def get_localized_videos_by_source_id(self, source_video_id: str, user_id: str) -> List[Dict[str, Any]]:
@@ -440,14 +473,26 @@ class FirestoreService:
             self.db.collection('localized_videos'),
             'source_video_id', '==', source_video_id
         )
+        # Optimized: Filter by user_id
+        query = self._where(query, 'user_id', '==', user_id)
+        
         docs = query.stream()
-        results = []
-        for doc in docs:
+        results = [{'id': doc.id, **doc.to_dict()} for doc in docs]
+        
+        if results:
+            return results
+            
+        # Fallback for old records without user_id
+        query_legacy = self._where(
+            self.db.collection('localized_videos'),
+            'source_video_id', '==', source_video_id
+        )
+        for doc in query_legacy.stream():
             data = doc.to_dict()
-            # Verify it belongs to a job owned by this user
-            job = self.get_processing_job(data.get('job_id'))
-            if job and job.get('user_id') == user_id:
-                results.append({'id': doc.id, **data})
+            if not data.get('user_id'):
+                job = self.get_processing_job(data.get('job_id'))
+                if job and job.get('user_id') == user_id:
+                    results.append({'id': doc.id, **data})
         return results
     
     def get_localized_videos_by_job_id(self, job_id: str) -> List[Dict[str, Any]]:
@@ -484,20 +529,17 @@ class FirestoreService:
         We will iterate over all localized videos and filter in memory if the dataset is small (unlikely for prod).
         
         OPTIMAL FIX for N+1:
-        We will rely on the fact that we can get all JOBs for a user efficiently.
-        Then we get all localized videos for those jobs. 
-        Since we can't do a massive 'in' query, and we don't have user_id on localized_videos...
-        
-        Hack for now:
-        We will fetch all localized_videos. This is bad for scale but solves the immediate "quota" issue by doing 1 big read instead of N small ones if N is large.
-        Wait, scanning the whole collection is worse for quota if collection is huge.
-        
-        Let's modify create_localized_video to include user_id, 
-        but for existing data we are stuck.
-        
-        Let's assume we can add user_id to localized_videos in the future.
-        For now, let's try to filter by job_ids in batches if we have the job list.
+        We will query localized_videos by user_id directly.
         """
+        query = self._where(self.db.collection('localized_videos'), 'user_id', '==', user_id)
+        docs = query.stream()
+        results = [{'id': doc.id, **doc.to_dict()} for doc in docs]
+        
+        # If we have results from optimized query, return them
+        if results:
+            return results
+
+        # Fallback for legacy data (as implemented before, but keeping it safe)
         # Get all user jobs first
         jobs, _ = self.list_processing_jobs(user_id, limit=1000)
         job_ids = [j['id'] for j in jobs]
@@ -525,12 +567,13 @@ class FirestoreService:
                                   token_expiry: Optional[datetime] = None,
                                   is_primary: bool = False,
                                   channel_avatar_url: Optional[str] = None,
-                                  master_connection_id: Optional[str] = None) -> str:
-        """Create YouTube channel connection.
-        
-        If master_connection_id is provided, this connection is intended to be
-        used as a language channel for the specified master connection.
-        """
+                                  master_connection_id: Optional[str] = None,
+                                  language_code: Optional[str] = None) -> str:
+        """Create YouTube channel connection with a single associated language."""
+        # If primary, default to English if no language provided
+        if is_primary and language_code is None:
+            language_code = 'en'
+            
         connection_id = str(uuid.uuid4())
         doc_ref = self.db.collection('youtube_connections').document(connection_id)
         doc_ref.set({
@@ -542,7 +585,8 @@ class FirestoreService:
             'refresh_token': refresh_token,
             'token_expiry': token_expiry,
             'is_primary': is_primary,
-            'master_connection_id': master_connection_id,  # Store intended master connection
+            'language_code': language_code,
+            'master_connection_id': master_connection_id,
             'created_at': firestore_admin.SERVER_TIMESTAMP,
             'updated_at': firestore_admin.SERVER_TIMESTAMP
         })
@@ -692,8 +736,7 @@ class FirestoreService:
         doc_ref = self.db.collection('user_settings').document(user_id)
         updates['updated_at'] = firestore_admin.SERVER_TIMESTAMP
         doc_ref.set(updates, merge=True)
-        if not doc_ref.get().exists:
-            doc_ref.update({'created_at': firestore_admin.SERVER_TIMESTAMP})
+        # Removed redundant .get() check
 
 
 # Global Firestore service instance

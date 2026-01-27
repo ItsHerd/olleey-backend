@@ -98,27 +98,30 @@ async def create_job(
         target_languages = []
         valid_channel_ids = []
         
-        for channel_id in request.target_channel_ids:
-            channel = channel_map.get(channel_id)
+        # 1. Use direct languages if provided
+        if request.target_languages:
+            target_languages.extend(request.target_languages)
             
-            if not channel:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Channel not found: {channel_id}"
-                )
-            
-            if channel.get('is_paused', False):
-                continue  # Skip paused channels
-            
-            # Extract languages from this channel
-            # Channels can have multiple languages (language_codes) or single language (language_code)
-            channel_languages = channel.get('language_codes', [])
-            if not channel_languages and channel.get('language_code'):
-                channel_languages = [channel.get('language_code')]
-            
-            if channel_languages:
-                target_languages.extend(channel_languages)
-                valid_channel_ids.append(channel_id)
+        # 2. Use channel-derived languages if provided
+        if request.target_channel_ids:
+            for channel_id in request.target_channel_ids:
+                channel = channel_map.get(channel_id)
+                
+                if not channel:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Channel not found: {channel_id}"
+                    )
+                
+                if channel.get('is_paused', False):
+                    continue  # Skip paused channels
+                
+                # Extract language from this channel
+                lang_code = channel.get('language_code')
+                
+                if lang_code:
+                    target_languages.append(lang_code)
+                    valid_channel_ids.append(channel_id)
         
         # Remove duplicates while preserving order
         target_languages = list(dict.fromkeys(target_languages))
@@ -126,17 +129,28 @@ async def create_job(
         if not target_languages:
             raise HTTPException(
                 status_code=400,
-                detail=f"No active channels found or channels have no languages configured. Requested: {request.target_channel_ids}"
+                detail=f"No target languages found. Please provide target_channel_ids or target_languages."
             )
+        
+        source_channel_id = request.source_channel_id or "unknown"
         
         # Create and enqueue the job
         job_id = await enqueue_dubbing_job(
             source_video_id=source_video_id,
-            source_channel_id=request.source_channel_id,
+            source_channel_id=source_channel_id,
             user_id=user_id,
             target_languages=target_languages,
             project_id=request.project_id,
+            is_simulation=request.is_simulation,
             background_tasks=background_tasks
+        )
+        
+        # Log activity
+        firestore_service.log_activity(
+            user_id=user_id,
+            project_id=request.project_id,
+            action="Created dubbing job",
+            details=f"Job {job_id} created for video {source_video_id}. Status: pending."
         )
         
         # Get the created job to return
@@ -170,6 +184,7 @@ async def create_job(
             source_channel_id=job.get('source_channel_id'),
             project_id=job.get('project_id'),
             target_languages=job.get('target_languages', []),
+            is_simulation=job.get('is_simulation', False),
             created_at=created_at or datetime.utcnow(),
             updated_at=updated_at or datetime.utcnow(),
             completed_at=None,
@@ -191,6 +206,7 @@ async def create_manual_job(
     target_channel_ids: Optional[str] = Form(None, description="Comma-separated list of target channel IDs"),
     target_languages: Optional[str] = Form(None, description="Comma-separated list of target language codes (e.g. 'es,de')"),
     project_id: Optional[str] = Form(None, description="Project ID to assign job to"),
+    is_simulation: bool = Form(False, description="If True, simulates the job instead of actual processing"),
     video_url: Optional[str] = Form(None, description="YouTube video URL (if not uploading a file)"),
     video_file: Optional[UploadFile] = File(None, description="Video file to upload (if not providing a URL)"),
     background_tasks: BackgroundTasks = None,
@@ -392,7 +408,16 @@ async def create_manual_job(
             user_id=user_id,
             target_languages=final_target_languages,
             project_id=project_id,
+            is_simulation=is_simulation,
             background_tasks=background_tasks
+        )
+        
+        # Log activity
+        firestore_service.log_activity(
+            user_id=user_id,
+            project_id=project_id,
+            action="Created manual dubbing job",
+            details=f"Job {job_id} created for video {source_video_id}. Status: pending."
         )
         
         # Get the created job to return
@@ -426,6 +451,7 @@ async def create_manual_job(
             source_channel_id=job.get('source_channel_id'),
             project_id=job.get('project_id'),
             target_languages=job.get('target_languages', []),
+            is_simulation=job.get('is_simulation', False),
             created_at=created_at or datetime.utcnow(),
             updated_at=updated_at or datetime.utcnow(),
             completed_at=None,
@@ -608,6 +634,14 @@ async def approve_job(
     # Add to background tasks
     background_tasks.add_task(publish_dubbed_videos, job_id)
 
+    # Log activity
+    firestore_service.log_activity(
+        user_id=user_id,
+        project_id=job.get('project_id'),
+        action="Approved dubbing job",
+        details=f"Job {job_id} approved for publishing."
+    )
+
     return {"status": "approved", "message": "Job approved for publishing"}
 
 
@@ -664,6 +698,7 @@ async def get_job_videos(
             status=vid.get('status'),
             storage_url=vid.get('storage_url'),
             thumbnail_url=vid.get('thumbnail_url'),
+            dubbed_audio_url=vid.get('dubbed_audio_url'),
             title=vid.get('title'),
             description=vid.get('description'),
             created_at=created_at or datetime.utcnow(),

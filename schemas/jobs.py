@@ -8,9 +8,11 @@ class CreateJobRequest(BaseModel):
     """Request model for creating a dubbing job."""
     source_video_id: Optional[str] = Field(None, description="YouTube video ID to dub (optional if video_url is provided)")
     source_video_url: Optional[str] = Field(None, description="YouTube video URL (alternative to source_video_id)")
-    source_channel_id: str = Field(..., description="YouTube channel ID where video is published")
-    target_channel_ids: List[str] = Field(..., description="List of target channel IDs to publish dubs to (each channel is connected to one or more languages)")
+    source_channel_id: Optional[str] = Field(None, description="YouTube channel ID where video is published")
+    target_channel_ids: Optional[List[str]] = Field(None, description="List of target channel IDs to publish dubs to")
+    target_languages: Optional[List[str]] = Field(None, description="Direct list of target language codes")
     project_id: Optional[str] = Field(None, description="Project ID to assign job to")
+    is_simulation: bool = Field(False, description="If True, simulates the job instead of actual processing")
     
     class Config:
         json_schema_extra = {
@@ -18,7 +20,8 @@ class CreateJobRequest(BaseModel):
                 "source_video_id": "dQw4w9WgXcQ",
                 "source_channel_id": "UCxxxxxx",
                 "target_channel_ids": ["channel_doc_id_1", "channel_doc_id_2"],
-                "project_id": "proj_123"
+                "project_id": "proj_123",
+                "is_simulation": False
             }
         }
 
@@ -28,6 +31,7 @@ class CreateManualJobRequest(BaseModel):
     source_channel_id: str = Field(..., description="YouTube channel ID where video is published")
     target_channel_ids: List[str] = Field(..., description="List of target channel IDs to publish dubs to (each channel is connected to one or more languages)")
     project_id: Optional[str] = Field(None, description="Project ID to assign job to")
+    is_simulation: bool = Field(False, description="If True, simulates the job instead of actual processing")
     # Note: video_url or video file will be provided via Form data in the endpoint
     
     class Config:
@@ -35,7 +39,8 @@ class CreateManualJobRequest(BaseModel):
             "example": {
                 "source_channel_id": "UCxxxxxx",
                 "target_channel_ids": ["channel_doc_id_1", "channel_doc_id_2"],
-                "project_id": "proj_123"
+                "project_id": "proj_123",
+                "is_simulation": False
             }
         }
 
@@ -45,10 +50,11 @@ class ProcessingJobResponse(BaseModel):
     job_id: str
     status: str
     progress: Optional[int] = None
-    source_video_id: str
-    source_channel_id: str
+    source_video_id: Optional[str] = None
+    source_channel_id: Optional[str] = None
     project_id: Optional[str] = None
     target_languages: List[str]
+    is_simulation: bool = False
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime] = None
@@ -70,6 +76,7 @@ class LocalizedVideoResponse(BaseModel):
     status: str
     storage_url: Optional[str] = None
     thumbnail_url: Optional[str] = None
+    dubbed_audio_url: Optional[str] = None  # URL for the localized audio preview
     title: Optional[str] = None
     description: Optional[str] = None
     created_at: datetime

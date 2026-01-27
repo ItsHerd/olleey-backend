@@ -1,18 +1,13 @@
 """Language channel-related Pydantic schemas."""
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List
 
 
 class LanguageChannelRequest(BaseModel):
-    """Request model for language channel registration.
-    
-    Supports both single language (language_code) and multiple languages (language_codes).
-    If both are provided, language_codes takes precedence.
-    """
+    """Request model for language channel registration."""
     channel_id: str
-    language_code: Optional[str] = None  # ISO 639-1 language code (single, for backward compatibility)
-    language_codes: Optional[List[str]] = None  # List of ISO 639-1 language codes
+    language_code: str = Field(..., description="ISO 639-1 language code for this channel")
     channel_name: Optional[str] = None
     master_connection_id: Optional[str] = None  # Master YouTube connection to associate with
     project_id: Optional[str] = None  # Project ID to associate with
@@ -32,8 +27,8 @@ class LanguageChannelResponse(BaseModel):
     """Response model for language channel."""
     id: str
     channel_id: str
-    language_code: Optional[str] = None  # Single language (for backward compatibility)
-    language_codes: List[str] = []  # List of languages supported by this channel
+    language_code: str
+    language_name: Optional[str] = None
     channel_name: Optional[str] = None
     channel_avatar_url: Optional[str] = None
     is_paused: bool = False
@@ -44,8 +39,7 @@ class LanguageChannelResponse(BaseModel):
 class UpdateChannelRequest(BaseModel):
     """Request model for updating language channel."""
     channel_name: Optional[str] = None
-    language_code: Optional[str] = None  # Single language (for backward compatibility)
-    language_codes: Optional[List[str]] = None  # List of languages (replaces language_code if provided)
+    language_code: Optional[str] = None  # Update associated language
     is_paused: Optional[bool] = None
     
     class Config:
@@ -77,9 +71,8 @@ class LanguageChannelNode(BaseModel):
     channel_id: str
     channel_name: Optional[str] = None
     channel_avatar_url: Optional[str] = None
-    language_code: Optional[str] = None  # Single language (for backward compatibility)
-    language_codes: List[str] = []  # List of languages supported
-    language_names: List[str] = []  # e.g., ["Spanish", "German", "French"]
+    language_code: str
+    language_name: Optional[str] = None
     created_at: datetime
     is_paused: bool = False
     status: ChannelNodeStatus
@@ -99,6 +92,9 @@ class YouTubeConnectionNode(BaseModel):
     status: ChannelNodeStatus
     # Connected language channels (satellites)
     language_channels: List[LanguageChannelNode]
+    # Language assigned directly to this connection
+    language_code: Optional[str] = None
+    language_name: Optional[str] = None
     # Stats
     total_videos: int = 0
     total_translations: int = 0

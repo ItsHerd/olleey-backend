@@ -13,6 +13,30 @@ class YouTubeConnectionSummary(BaseModel):
     connected_at: datetime
 
 
+class CreditSummary(BaseModel):
+    """Summary of user credits."""
+    used: int
+    limit: int
+    reset_date: Optional[datetime] = None
+
+
+class WeeklyStats(BaseModel):
+    """Mini-widget statistics for the current week."""
+    videos_completed: int
+    languages_added: int
+    growth_percentage: float
+
+
+class ActivityFeedItem(BaseModel):
+    """Single item in the activity feed."""
+    id: str
+    action: str
+    details: Optional[str] = None
+    status: str
+    timestamp: datetime
+    project_id: Optional[str] = None
+
+
 class ProcessingJobSummary(BaseModel):
     """Summary of processing job."""
     job_id: str
@@ -38,6 +62,10 @@ class DashboardResponse(BaseModel):
     auth_provider: str
     created_at: datetime
     
+    # Statistics & Credits
+    credits: CreditSummary
+    weekly_stats: WeeklyStats
+    
     # YouTube connections
     youtube_connections: List[YouTubeConnectionSummary] = []
     has_youtube_connection: bool = False
@@ -56,3 +84,6 @@ class DashboardResponse(BaseModel):
     # Projects
     projects: List[ProjectSummary] = []
     total_projects: int = 0
+    
+    # Activity
+    recent_activity: List[ActivityFeedItem] = []

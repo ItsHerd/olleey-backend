@@ -4,7 +4,7 @@ from typing import Optional
 import asyncio
 
 from services.firestore import firestore_service
-from services.dubbing import process_dubbing_job
+from services.dubbing import process_dubbing_job, simulate_dubbing_job
 
 
 async def enqueue_dubbing_job(
@@ -13,6 +13,7 @@ async def enqueue_dubbing_job(
     user_id: str,
     target_languages: list[str],
     project_id: Optional[str] = None,
+    is_simulation: bool = False,
     db: Optional[None] = None,  # Kept for compatibility but not used
     background_tasks: Optional[BackgroundTasks] = None
 ) -> str:
@@ -24,6 +25,8 @@ async def enqueue_dubbing_job(
         source_channel_id: YouTube channel ID
         user_id: User ID
         target_languages: List of language codes to create dubs for
+        project_id: Project ID
+        is_simulation: If True, run simulation instead of real processing
         db: Deprecated - kept for compatibility (not used, Firestore is used instead)
         background_tasks: FastAPI BackgroundTasks (optional)
         
@@ -36,13 +39,17 @@ async def enqueue_dubbing_job(
         source_channel_id=source_channel_id,
         user_id=user_id,
         target_languages=target_languages,
-        project_id=project_id
+        project_id=project_id,
+        is_simulation=is_simulation
     )
     
     # Enqueue to background task
     if background_tasks:
         async def process_job():
-            await process_dubbing_job(job_id)
+            if is_simulation:
+                await simulate_dubbing_job(job_id)
+            else:
+                await process_dubbing_job(job_id)
         
         background_tasks.add_task(process_job)
     else:
