@@ -131,13 +131,16 @@ def get_youtube_oauth_flow() -> Flow:
     Returns:
         Flow: Configured OAuth flow for YouTube authentication
     """
-    # Extract base URL (protocol + host + port) from redirect_uri
-    # Note: Google Cloud Console requires localhost or valid domain, not IP addresses
-    # The server is accessible at both localhost:8000 and 10.0.0.15:8000 when bound to 0.0.0.0
-    from urllib.parse import urlparse
-    parsed = urlparse(settings.google_redirect_uri)
-    base_url = f"{parsed.scheme}://{parsed.netloc}"
-    youtube_callback_uri = f"{base_url}/youtube/connect/callback"
+    # Use the environment variable directly. If it's a full URL, it must match Google Console exactly.
+    # If it's just a base URL, we ensure the /youtube/connect/callback path is present.
+    youtube_callback_uri = settings.google_redirect_uri
+    if not youtube_callback_uri.endswith("/youtube/connect/callback"):
+        from urllib.parse import urlparse
+        parsed = urlparse(youtube_callback_uri)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        youtube_callback_uri = f"{base_url}/youtube/connect/callback"
+    
+    print(f"[YOUTUBE_AUTH] Generated Redirect URI: {youtube_callback_uri}")
     
     client_config = {
         "web": {

@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 import os
 
 from config import settings
@@ -26,6 +27,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Trust proxy headers for Render deployment
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # CORS middleware
 app.add_middleware(
