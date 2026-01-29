@@ -172,14 +172,13 @@ async def initiate_youtube_connection(
     Initiate YouTube OAuth flow for channel connection.
     
     Redirects user to Google OAuth consent screen with YouTube scopes.
-    
-    Authentication can be provided via:
-    - Authorization header: `Authorization: Bearer <token>` (preferred)
-    - Query parameter: `?token=<token>` (for OAuth redirect flows where headers aren't available)
-    
-    If master_connection_id is provided, the new channel will be associated as a language channel
-    with the specified master connection. Otherwise, it will be created as a new master connection.
     """
+    print(f"\n[INITIATE_CONNECT] Starting connection flow...")
+    print(f"[INITIATE_CONNECT] Token in Query: {'Yes' if token else 'No'}")
+    print(f"[INITIATE_CONNECT] Current User from Middleware: {'Yes' if current_user else 'No'}")
+    print(f"[INITIATE_CONNECT] master_connection_id: {master_connection_id}")
+    print(f"[INITIATE_CONNECT] X-Forwarded-Proto: {request.headers.get('x-forwarded-proto') if request else 'No Request'}")
+    print(f"[INITIATE_CONNECT] Request URL Scheme: {request.url.scheme if request else 'No Request'}")
     user_token = None
     user_id = None
     
@@ -252,6 +251,9 @@ async def initiate_youtube_connection(
             state=state_encoded  # Include token and master_connection_id in state
         )
         
+        print(f"[INITIATE_CONNECT] Redirecting to Google Auth URL")
+        print(f"[INITIATE_CONNECT] Google Auth URL: {authorization_url[:100]}...")
+        
         return RedirectResponse(url=authorization_url)
     except Exception as e:
         raise HTTPException(
@@ -270,21 +272,13 @@ async def youtube_connection_callback(
 ):
     """
     Handle YouTube OAuth callback and store channel connection.
-    
-    Note: This endpoint is called by Google OAuth redirect, so authentication
-    must be passed via query parameter or stored in session/state.
-    
-    Args:
-        code: Authorization code from Google OAuth
-        error: Error message if OAuth failed
-        state: OAuth state parameter (can contain user token)
-        token: Firebase ID token (alternative authentication method)
-        current_user: Current authenticated user from Firebase Auth (if provided)
-        
-    Returns:
-        RedirectResponse: Redirects to frontend with success/error
     """
-    print(f"[DEBUG] Callback received - code: {code is not None}, error: {error}, state: {state is not None}, token: {token is not None}, current_user: {current_user is not None}")
+    print(f"\n[CALLBACK] Received callback from Google...")
+    print(f"[CALLBACK] code present: {'Yes' if code else 'No'}")
+    print(f"[CALLBACK] error: {error}")
+    print(f"[CALLBACK] state present: {'Yes' if state else 'No'}")
+    print(f"[CALLBACK] token present: {'Yes' if token else 'No'}")
+    print(f"[CALLBACK] current_user present: {'Yes' if current_user else 'No'}")
     
     if error:
         # Redirect to frontend with error message
@@ -336,7 +330,9 @@ async def youtube_connection_callback(
             if user_token:
                 decoded_token = auth.verify_id_token(user_token)
                 user_id = decoded_token["uid"]
-        except Exception:
+                print(f"[CALLBACK] Identified User ID from state: {user_id}")
+        except Exception as e:
+            print(f"[CALLBACK] Failed to parse state or verify token: {str(e)}")
             pass  # State might not contain token, that's okay
     
     if not user_id:
