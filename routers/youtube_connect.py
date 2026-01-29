@@ -252,7 +252,7 @@ async def initiate_youtube_connection(
         )
         
         print(f"[INITIATE_CONNECT] Redirecting to Google Auth URL")
-        print(f"[INITIATE_CONNECT] Google Auth URL: {authorization_url[:100]}...")
+        print(f"[INITIATE_CONNECT] Full Google Auth URL: {authorization_url}")
         
         return RedirectResponse(url=authorization_url)
     except Exception as e:
