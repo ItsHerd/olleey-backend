@@ -238,6 +238,7 @@ async def login_user(request: UserLoginRequest):
     except HTTPException:
         raise
     except Exception as e:
+        print(f"[AUTH] Login failed with error: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Login failed: {str(e)}"
@@ -377,6 +378,7 @@ async def google_sign_in(request: GoogleOAuthRequest):
     except HTTPException:
         raise
     except Exception as e:
+        print(f"[AUTH] Google sign-in failed with error: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Google sign-in failed: {str(e)}"

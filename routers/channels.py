@@ -323,14 +323,27 @@ async def create_channel(
                 # Use the master_connection_id from the YouTube connection
                 master_connection_id = master_conn_id
         
-        # Validate language code
-        if not request.language_code:
-            raise HTTPException(
-                status_code=400,
-                detail="language_code must be provided"
-            )
-        language_code = request.language_code
+        # Check if user has any existing projects
+        existing_projects = firestore_service.list_projects(user_id)
+        target_project_id = request.project_id
         
+        if not existing_projects:
+            # No projects exist -> Create Default Project
+            print(f"[DEBUG] No projects found for user {user_id}. Creating 'Default Project'.")
+            target_project_id = firestore_service.create_project(
+                user_id=user_id,
+                name="Default Project",
+                master_connection_id=master_connection_id
+            )
+            
+            # Log the auto-creation
+            firestore_service.log_activity(
+                user_id=user_id,
+                project_id=target_project_id,
+                action="Created project",
+                details="Default Project created automatically during channel creation."
+            )
+
         # Check if channel already exists for this channel_id
         existing_channels = firestore_service.get_language_channels(user_id)
         existing = None
@@ -354,7 +367,8 @@ async def create_channel(
                     language_code=request.language_code,
                     channel_name=request.channel_name,
                     channel_avatar_url=channel_avatar_url,
-                    master_connection_id=master_connection_id  # Reassign to master
+                    master_connection_id=master_connection_id,  # Reassign to master
+                    project_id=target_project_id  # Also link to project if needed
                 )
                 
                 # Get updated channel to return
@@ -407,7 +421,7 @@ async def create_channel(
             channel_name=request.channel_name,
             channel_avatar_url=channel_avatar_url,
             master_connection_id=master_connection_id,  # Associate with master
-            project_id=request.project_id
+            project_id=target_project_id
         )
         
         # Get created channel to return

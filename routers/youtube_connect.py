@@ -539,6 +539,28 @@ async def youtube_connection_callback(
                         channel_avatar_url=channel_avatar_url,
                         master_connection_id=master_connection_id  # Store master connection ID
                     )
+
+                    # Auto-create project if none exist
+                    existing_projects = firestore_service.list_projects(user_id)
+                    if not existing_projects:
+                        print(f"[DEBUG] No projects found for user {user_id}. Creating 'Default Project'.")
+                        # If this is a master connection (no master_connection_id), use its connection_id
+                        # If it's a satellite connection (has master_connection_id), use that instead
+                        project_master_id = master_connection_id if master_connection_id else connection_id
+                        
+                        target_project_id = firestore_service.create_project(
+                            user_id=user_id,
+                            name="Default Project",
+                            master_connection_id=project_master_id
+                        )
+                        
+                        # Log the auto-creation
+                        firestore_service.log_activity(
+                            user_id=user_id,
+                            project_id=target_project_id,
+                            action="Created project",
+                            details="Default Project created automatically during YouTube connection."
+                        )
             
             # Redirect to frontend with success message
             # Get frontend URL from settings or use default

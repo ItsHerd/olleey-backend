@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     firebase_project_id_prod: str = "vox-translate-b8c94"
     firebase_credentials_path_prod: str = "./vox-translate-b8c94-firebase-adminsdk-fbsvc-43eee8c143.json"
     firebase_web_api_key_prod: Optional[str] = None
+    firebase_web_api_key: Optional[str] = "AIzaSyBEc9WLXdRkTxYsS0djnNTOMHka_0oaNKs"
 
     # Test Credentials
     firebase_project_id_test: str = "olleey-test"
@@ -67,8 +68,8 @@ class Settings(BaseSettings):
     def firebase_web_api_key(self) -> Optional[str]:
         """Get active Web API Key based on environment."""
         if self.environment.lower() in ["test", "testing"]:
-            return self.firebase_web_api_key_test
-        return self.firebase_web_api_key_prod
+            return self.firebase_web_api_key_test or self.firebase_web_api_key
+        return self.firebase_web_api_key_prod or self.firebase_web_api_key
     
     # Local Storage
     local_storage_dir: str = "./storage"  # Directory for storing processed videos locally
