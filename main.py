@@ -31,6 +31,13 @@ app = FastAPI(
 # Trust proxy headers for Render deployment
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
+@app.middleware("http")
+async def force_https_middleware(request, call_next):
+    """Force https scheme for production requests behind a proxy."""
+    if settings.environment.lower() == "production" or request.headers.get("x-forwarded-proto") == "https":
+        request.scope["scheme"] = "https"
+    return await call_next(request)
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
