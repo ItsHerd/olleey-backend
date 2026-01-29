@@ -93,5 +93,11 @@ class Settings(BaseSettings):
         case_sensitive = False
         extra = "ignore"
 
+        @classmethod
+        def parse_env_var(cls, field_name: str, raw_val: str):
+            if field_name in ["google_client_id", "google_client_secret", "google_redirect_uri", "firebase_web_api_key"]:
+                return raw_val.strip()
+            return raw_val
+
 
 settings = Settings()
