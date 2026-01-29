@@ -320,7 +320,7 @@ async def google_sign_in(request: GoogleOAuthRequest):
                 f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={api_key}",
                 json={
                     "postBody": f"id_token={request.id_token}&providerId=google.com",
-                    "requestUri": settings.google_redirect_uri,
+                    "requestUri": f"{settings.frontend_url}/app" if settings.frontend_url else settings.google_redirect_uri,
                     "returnSecureToken": True,
                     "returnIdpCredential": True
                 },
@@ -329,6 +329,7 @@ async def google_sign_in(request: GoogleOAuthRequest):
             
             if response.status_code != 200:
                 error_data = response.json()
+                print(f"[AUTH] Firebase signInWithIdp failed: {error_data}")
                 error_message = error_data.get("error", {}).get("message", "Google sign-in failed")
                 
                 # Check for API key errors
@@ -341,7 +342,7 @@ async def google_sign_in(request: GoogleOAuthRequest):
                 if "INVALID_IDP_RESPONSE" in error_message or "INVALID_ID_TOKEN" in error_message:
                     raise HTTPException(
                         status_code=400,
-                        detail="Invalid Google ID token. Please ensure you're using a valid token from Google Sign-In."
+                        detail=f"Invalid Google ID token: {error_message}"
                     )
                 
                 if "FEDERATED_USER_ID_ALREADY_LINKED" in error_message:
