@@ -1,7 +1,7 @@
 """Dashboard router for user overview and statistics."""
 from fastapi import APIRouter, Depends, HTTPException
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 import json
 
 from schemas.dashboard import DashboardResponse, YouTubeConnectionSummary, ProcessingJobSummary, ProjectSummary, CreditSummary, WeeklyStats, ActivityFeedItem
@@ -13,31 +13,77 @@ from datetime import timedelta
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
-@router.get("/activity", response_model=List[ActivityFeedItem])
+@router.get("/activity")
 async def get_activity_feed(
     current_user: dict = Depends(get_current_user),
-    limit: int = 20
+    limit: int = 20,
+    project_id: Optional[str] = None
 ):
     """
     Get global activity feed for the current user across all projects.
+    Returns data in frontend-compatible format with message, time, icon, color.
     """
     user_id = current_user["user_id"]
-    logs = firestore_service.list_activity_logs(user_id=user_id, limit=limit)
+    logs = firestore_service.list_activity_logs(user_id=user_id, project_id=project_id, limit=limit)
+    
+    # Map status to icon
+    def get_icon_for_action(action: str, status: str) -> str:
+        action_lower = action.lower()
+        if 'upload' in action_lower:
+            return 'upload'
+        elif 'complet' in action_lower or 'success' in action_lower:
+            return 'check'
+        elif 'start' in action_lower or 'creat' in action_lower:
+            return 'plus'
+        elif 'publish' in action_lower or 'youtube' in action_lower:
+            return 'youtube'
+        elif 'error' in action_lower or 'fail' in action_lower:
+            return 'alert'
+        else:
+            return 'zap'
+    
+    # Format relative time
+    def get_relative_time(timestamp) -> str:
+        if hasattr(timestamp, 'timestamp'):
+            dt = datetime.fromtimestamp(timestamp.timestamp())
+        elif isinstance(timestamp, datetime):
+            dt = timestamp
+        else:
+            return 'Just now'
+        
+        now = datetime.utcnow()
+        diff = now - dt
+        
+        if diff.total_seconds() < 60:
+            return 'Just now'
+        elif diff.total_seconds() < 3600:
+            mins = int(diff.total_seconds() / 60)
+            return f'{mins}m ago'
+        elif diff.total_seconds() < 86400:
+            hours = int(diff.total_seconds() / 3600)
+            return f'{hours}h ago'
+        else:
+            days = int(diff.total_seconds() / 86400)
+            return f'{days}d ago'
     
     activity_items = []
     for log in logs:
+        action = log.get('action', 'Unknown Action')
+        details = log.get('details', '')
+        status = log.get('status', 'info')
         timestamp = log.get('timestamp')
-        if hasattr(timestamp, 'timestamp'):
-            timestamp = datetime.fromtimestamp(timestamp.timestamp())
-            
-        activity_items.append(ActivityFeedItem(
-            id=log.get('id', 'unknown'),
-            action=log.get('action', 'Unknown Action'),
-            details=log.get('details'),
-            status=log.get('status', 'info'),
-            timestamp=timestamp or datetime.utcnow(),
-            project_id=log.get('project_id')
-        ))
+        
+        # Create message from action and details
+        message = f"{action}: {details}" if details else action
+        
+        activity_items.append({
+            'id': log.get('id', 'unknown'),
+            'message': message,
+            'time': get_relative_time(timestamp),
+            'icon': get_icon_for_action(action, status),
+            'color': 'green' if status == 'success' else 'yellow' if status == 'warning' else 'red' if status == 'error' else 'blue',
+            'type': status
+        })
         
     return activity_items
 
@@ -113,7 +159,9 @@ async def get_dashboard(
                         videos_completed_this_week += 1
         
         recent_jobs = []
-        for job in jobs_data[:5]:
+        # Return more jobs for demo users to show all data
+        job_limit = 20 if len(jobs_data) > 10 else 5
+        for job in jobs_data[:job_limit]:
             recent_jobs.append(
                 ProcessingJobSummary(
                     job_id=job.get('id', ''),

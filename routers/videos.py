@@ -77,6 +77,84 @@ async def get_mock_videos(user_id: str, limit: int) -> VideoListResponse:
     return VideoListResponse(videos=videos, total=len(videos))
 
 
+async def get_demo_videos_formatted(user_id: str, project_id: Optional[str], limit: int) -> VideoListResponse:
+    """Format demo jobs and localized videos into the expected video list format."""
+    from typing import Dict
+    
+    # Get all jobs for the user
+    jobs, total = firestore_service.list_processing_jobs(user_id, project_id=project_id, limit=limit)
+    print(f"[DEMO] Found {len(jobs)} jobs for user {user_id}")
+    
+    videos = []
+    for job in jobs:
+        source_video_id = job.get('source_video_id')
+        if not source_video_id:
+            continue
+            
+        # Get localized videos for this job
+        localized_vids = firestore_service.get_localized_videos_by_job_id(job['id'])
+        
+        # Build localizations list
+        localizations = []
+        for loc_vid in localized_vids:
+            lang_code = loc_vid.get('language_code')
+            status = loc_vid.get('status', 'processing')
+            
+            # Map statuses to frontend expectations
+            if status == 'waiting_approval':
+                frontend_status = 'draft'
+            elif status == 'published':
+                frontend_status = 'live'
+            elif status in ['processing', 'pending']:
+                frontend_status = 'processing'
+            else:
+                frontend_status = 'processing'
+            
+            localizations.append(LocalizationStatus(
+                language_code=lang_code,
+                status=frontend_status,
+                video_id=loc_vid.get('localized_video_id'),
+                channel_id=loc_vid.get('channel_id'),
+                published_at=loc_vid.get('published_at') or loc_vid.get('updated_at'),
+                title=loc_vid.get('title'),
+                description=loc_vid.get('description')
+            ))
+        
+        # Get first localized video for thumbnail and title
+        first_loc = localized_vids[0] if localized_vids else {}
+        
+        # Get all language codes
+        all_lang_codes = [loc.language_code for loc in localizations]
+        published_lang_codes = [loc.language_code for loc in localizations if loc.status == 'live']
+        
+        print(f"[DEMO] Video {source_video_id}: {len(localizations)} localizations, {len(published_lang_codes)} published")
+        
+        # Create video item
+        video = VideoItem(
+            video_id=source_video_id,
+            title=first_loc.get('title', f"Video {source_video_id}").split(' (')[0],  # Remove language suffix
+            thumbnail_url=first_loc.get('thumbnail_url', f"https://i.ytimg.com/vi/{source_video_id}/hqdefault.jpg"),
+            published_at=job.get('created_at', datetime.utcnow()),
+            channel_id=job.get('source_channel_id', ''),
+            channel_name="Demo Channel",
+            localizations=localizations,
+            view_count=sum(1000 * (i+1) for i in range(len(localizations))),  # Mock view counts
+            video_type="original",
+            source_video_id=None,
+            translated_languages=published_lang_codes,
+            # Add duration for credit estimation
+            duration=first_loc.get('duration', 210),  # Default 3.5 minutes
+            global_views=sum(1000 * (i+1) for i in range(len(published_lang_codes)))
+        )
+        
+        videos.append(video)
+    
+    return VideoListResponse(
+        videos=videos,
+        total=len(videos)
+    )
+
+
 def get_youtube_service(user_id: str, connection_id=None, raise_on_mock=True):
     """
     Build and return YouTube Data API v3 service.
@@ -95,6 +173,11 @@ async def list_videos(
     Fetch authenticated user's uploaded videos from YouTube with filtering.
     """
     user_id = current_user["user_id"]
+    
+    # Check if demo user - return demo data in expected format
+    from services.demo_simulator import demo_simulator
+    if demo_simulator.is_demo_user(user_id):
+        return await get_demo_videos_formatted(user_id, project_id, limit)
     
     try:
         # Get YouTube service

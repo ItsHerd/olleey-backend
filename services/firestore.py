@@ -240,19 +240,24 @@ class FirestoreService:
     def list_activity_logs(self, user_id: str, project_id: Optional[str] = None, 
                            limit: int = 50) -> List[Dict[str, Any]]:
         """List activity logs for a user or specific project."""
+        # Query without ordering to avoid composite index requirement
         query = self._where(self.db.collection('activity_logs'), 'user_id', '==', user_id)
         if project_id:
             query = self._where(query, 'project_id', '==', project_id)
         
-        # Sort by timestamp descending
-        docs = query.order_by('timestamp', direction=firestore_admin.Query.DESCENDING).limit(limit).stream()
+        # Get all docs and sort in memory
+        docs = query.limit(limit * 2).stream()  # Get more to ensure we have enough after filtering
         
         logs = []
         for doc in docs:
             data = doc.to_dict()
             data['id'] = doc.id
             logs.append(data)
-        return logs
+        
+        # Sort by timestamp in memory
+        logs.sort(key=lambda x: x.get('timestamp', datetime.min), reverse=True)
+        
+        return logs[:limit]
 
     # Processing Job operations
     def create_processing_job(self, source_video_id: str, source_channel_id: str,

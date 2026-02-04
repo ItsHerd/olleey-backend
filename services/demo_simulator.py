@@ -179,6 +179,11 @@ class DemoSimulator:
         
         # Create demo jobs
         await self._create_demo_jobs(user_id, project_workflow, project_music, master_connection_id)
+        
+        # Create initial activity logs
+        self._create_demo_activities(user_id, project_workflow, project_music)
+        
+        print(f"[DEMO] Demo data creation complete for user: {user_id}")
     
     async def _create_demo_jobs(self, user_id: str, project_workflow: str, project_music: str, master_channel_id: str):
         """Create demo jobs in various states."""
@@ -237,13 +242,13 @@ class DemoSimulator:
         for lang in ['ja', 'pt']:
             self._create_localized_video(job_3, DEMO_CONFIG["source_videos"][2], lang, 'processing', user_id)
         
-        # Job 4: Completed
+        # Job 4: Completed (Put all published in project_workflow since it's the default)
         job_4 = str(uuid.uuid4())
         self.db.collection('processing_jobs').document(job_4).set({
             'source_video_id': DEMO_CONFIG["source_videos"][0]['id'],
             'source_channel_id': master_channel_id,
             'user_id': user_id,
-            'project_id': project_music,
+            'project_id': project_workflow,  # Changed to workflow
             'status': 'completed',
             'target_languages': ['es', 'de', 'fr'],
             'progress': 100,
@@ -255,6 +260,65 @@ class DemoSimulator:
         
         for lang in ['es', 'de', 'fr']:
             self._create_localized_video(job_4, DEMO_CONFIG["source_videos"][0], lang, 'published', user_id)
+        
+        print(f"[DEMO] Created Job 4 (published): {DEMO_CONFIG['source_videos'][0]['title']} with 3 languages")
+        
+        # Job 5: Published (More released media)
+        job_5 = str(uuid.uuid4())
+        self.db.collection('processing_jobs').document(job_5).set({
+            'source_video_id': DEMO_CONFIG["source_videos"][1]['id'],
+            'source_channel_id': master_channel_id,
+            'user_id': user_id,
+            'project_id': project_workflow,
+            'status': 'completed',
+            'target_languages': ['es', 'fr', 'it', 'pt'],
+            'progress': 100,
+            'is_simulation': True,
+            'completed_at': firestore_admin.SERVER_TIMESTAMP,
+            'created_at': firestore_admin.SERVER_TIMESTAMP,
+            'updated_at': firestore_admin.SERVER_TIMESTAMP
+        })
+        
+        for lang in ['es', 'fr', 'it', 'pt']:
+            self._create_localized_video(job_5, DEMO_CONFIG["source_videos"][1], lang, 'published', user_id)
+        
+        # Job 6: Published (Even more released media)
+        job_6 = str(uuid.uuid4())
+        self.db.collection('processing_jobs').document(job_6).set({
+            'source_video_id': DEMO_CONFIG["source_videos"][2]['id'],
+            'source_channel_id': master_channel_id,
+            'user_id': user_id,
+            'project_id': project_workflow,  # Changed to workflow
+            'status': 'completed',
+            'target_languages': ['de', 'ja'],
+            'progress': 100,
+            'is_simulation': True,
+            'completed_at': firestore_admin.SERVER_TIMESTAMP,
+            'created_at': firestore_admin.SERVER_TIMESTAMP,
+            'updated_at': firestore_admin.SERVER_TIMESTAMP
+        })
+        
+        for lang in ['de', 'ja']:
+            self._create_localized_video(job_6, DEMO_CONFIG["source_videos"][2], lang, 'published', user_id)
+        
+        # Job 7: Published (Additional released media)
+        job_7 = str(uuid.uuid4())
+        self.db.collection('processing_jobs').document(job_7).set({
+            'source_video_id': DEMO_CONFIG["source_videos"][3]['id'],
+            'source_channel_id': master_channel_id,
+            'user_id': user_id,
+            'project_id': project_workflow,
+            'status': 'completed',
+            'target_languages': ['es', 'de', 'fr', 'pt', 'ja'],
+            'progress': 100,
+            'is_simulation': True,
+            'completed_at': firestore_admin.SERVER_TIMESTAMP,
+            'created_at': firestore_admin.SERVER_TIMESTAMP,
+            'updated_at': firestore_admin.SERVER_TIMESTAMP
+        })
+        
+        for lang in ['es', 'de', 'fr', 'pt', 'ja']:
+            self._create_localized_video(job_7, DEMO_CONFIG["source_videos"][3], lang, 'published', user_id)
     
     def _create_localized_video(self, job_id: str, source_video: Dict, lang_code: str, status: str, user_id: str):
         """Create a localized video."""
@@ -272,7 +336,7 @@ class DemoSimulator:
         if status == 'published':
             localized_video_id = f"VID{uuid.uuid4().hex[:10]}"
         
-        self.db.collection('localized_videos').document(video_id).set({
+        video_data = {
             'job_id': job_id,
             'source_video_id': source_video['id'],
             'localized_video_id': localized_video_id,
@@ -284,10 +348,93 @@ class DemoSimulator:
             'thumbnail_url': source_video['thumbnail'],
             'title': f"{source_video['title']} ({lang_name} Dub)",
             'description': f"AI-dubbed version in {lang_name}. Demo simulation.",
+            'duration': source_video.get('duration', 210),
             'is_simulation': True,
             'created_at': firestore_admin.SERVER_TIMESTAMP,
             'updated_at': firestore_admin.SERVER_TIMESTAMP
-        })
+        }
+        
+        if status == 'published':
+            video_data['published_at'] = firestore_admin.SERVER_TIMESTAMP
+        
+        self.db.collection('localized_videos').document(video_id).set(video_data)
+    
+    def _create_demo_activities(self, user_id: str, project_workflow: str, project_music: str):
+        """Create initial demo activity logs."""
+        now = datetime.utcnow()
+        
+        activities = [
+            {
+                'user_id': user_id,
+                'project_id': project_workflow,
+                'action': 'Video uploaded',
+                'status': 'info',
+                'details': 'Luis Fonsi - Despacito uploaded for dubbing',
+                'timestamp': now - timedelta(hours=2),
+            },
+            {
+                'user_id': user_id,
+                'project_id': project_workflow,
+                'action': 'Processing started',
+                'status': 'info',
+                'details': 'Started dubbing to 5 languages',
+                'timestamp': now - timedelta(hours=1, minutes=55),
+            },
+            {
+                'user_id': user_id,
+                'project_id': project_workflow,
+                'action': 'Processing completed',
+                'status': 'success',
+                'details': 'All language versions ready for review',
+                'timestamp': now - timedelta(hours=1, minutes=30),
+            },
+            {
+                'user_id': user_id,
+                'project_id': project_music,
+                'action': 'Video uploaded',
+                'status': 'info',
+                'details': 'PSY - GANGNAM STYLE uploaded for dubbing',
+                'timestamp': now - timedelta(minutes=45),
+            },
+            {
+                'user_id': user_id,
+                'project_id': project_music,
+                'action': 'Processing started',
+                'status': 'info',
+                'details': 'Started dubbing to Japanese and Portuguese',
+                'timestamp': now - timedelta(minutes=40),
+            },
+            {
+                'user_id': user_id,
+                'project_id': project_workflow,
+                'action': 'Video uploaded',
+                'status': 'info',
+                'details': 'Me at the zoo uploaded for dubbing',
+                'timestamp': now - timedelta(minutes=20),
+            },
+            {
+                'user_id': user_id,
+                'project_id': project_workflow,
+                'action': 'Processing completed',
+                'status': 'success',
+                'details': 'Spanish, German, and Italian versions ready',
+                'timestamp': now - timedelta(minutes=5),
+            },
+        ]
+        
+        for activity in activities:
+            # Create activity log manually with custom timestamp
+            log_id = str(uuid.uuid4())
+            self.db.collection('activity_logs').document(log_id).set({
+                'user_id': activity['user_id'],
+                'project_id': activity['project_id'],
+                'action': activity['action'],
+                'status': activity['status'],
+                'details': activity['details'],
+                'timestamp': activity['timestamp']
+            })
+        
+        print(f"[DEMO] Created {len(activities)} activity logs")
     
     async def simulate_approval(self, user_id: str, job_id: str, video_ids: List[str], action: str):
         """Simulate video approval/rejection with realistic delays."""
@@ -339,14 +486,36 @@ class DemoSimulator:
                     'updated_at': firestore_admin.SERVER_TIMESTAMP
                 })
         
-        # Log activity
-        firestore_service.log_activity(
-            user_id=user_id,
-            project_id=job.get('project_id'),
-            action=f"Videos {action}d",
-            status='success',
-            details=f"{len(video_ids)} video(s) {action}d"
-        )
+        # Log activity with more details
+        job_ref = self.db.collection('processing_jobs').document(job_id)
+        job = job_ref.get().to_dict()
+        
+        if action == "approve":
+            # Get language names for the approved videos
+            approved_langs = []
+            for video_id in video_ids:
+                video = self.db.collection('localized_videos').document(video_id).get().to_dict()
+                if video:
+                    approved_langs.append(video.get('language_code', ''))
+            
+            lang_names = {'es': 'Spanish', 'de': 'German', 'fr': 'French', 'it': 'Italian', 'pt': 'Portuguese', 'ja': 'Japanese'}
+            lang_list = ', '.join([lang_names.get(lang, lang) for lang in approved_langs if lang])
+            
+            firestore_service.log_activity(
+                user_id=user_id,
+                project_id=job.get('project_id'),
+                action="Videos approved and published",
+                status='success',
+                details=f"Published {len(video_ids)} language version(s): {lang_list}"
+            )
+        else:
+            firestore_service.log_activity(
+                user_id=user_id,
+                project_id=job.get('project_id'),
+                action=f"Videos {action}d",
+                status='warning' if action == 'reject' else 'success',
+                details=f"{len(video_ids)} video(s) {action}d for revision"
+            )
     
     async def simulate_processing_progress(self, user_id: str, job_id: str):
         """Simulate processing progress for a job."""
