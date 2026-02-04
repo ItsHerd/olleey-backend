@@ -10,21 +10,27 @@ jobs:
     steps:
     - name: Deploy via SSH
       uses: appleboy/ssh-action@v1.0.3
+      env:
+        ENV_FILE: ${{ secrets.ENV_FILE }}
       with:
         host: ${{ secrets.SSH_HOST }}
         username: ${{ secrets.SSH_USERNAME }}
         key: ${{ secrets.SSH_KEY }}
+        envs: ENV_FILE
         script: |
-          # UPDATED PATH: Matches your actual server folder
+          # 1. Go to the project folder
           cd /home/moltafet_ahmad2015/olleey-backend
           
-          # Reset and Pull
+          # 2. Update Code
           git reset --hard origin/main
           git pull origin main
           
-          # Install dependencies
+          # 3. OVERWRITE .env file with the one from GitHub Secrets
+          echo "$ENV_FILE" > .env
+          
+          # 4. Install Dependencies
           source venv/bin/activate
           pip install -r requirements.txt
           
-          # Restart the service
+          # 5. Restart the App to apply changes
           sudo systemctl restart fastapi_app
