@@ -12,25 +12,24 @@ jobs:
       uses: appleboy/ssh-action@v1.0.3
       env:
         ENV_FILE: ${{ secrets.ENV_FILE }}
+        # ADD THIS LINE:
+        GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
       with:
         host: ${{ secrets.SSH_HOST }}
         username: ${{ secrets.SSH_USERNAME }}
         key: ${{ secrets.SSH_KEY }}
-        envs: ENV_FILE
+        # ADD THIS to the envs list:
+        envs: ENV_FILE,GCP_SA_KEY
         script: |
-          # 1. Go to the project folder
           cd /home/moltafet_ahmad2015/olleey-backend
-          
-          # 2. Update Code
           git reset --hard origin/main
           git pull origin main
           
-          # 3. OVERWRITE .env file with the one from GitHub Secrets
+          # Write the secrets to files
           echo "$ENV_FILE" > .env
+          # ADD THIS LINE (Creates the JSON file on the server):
+          echo "$GCP_SA_KEY" > vox-translate-b8c94-firebase-adminsdk-fbsvc-7749166547.json
           
-          # 4. Install Dependencies
           source venv/bin/activate
           pip install -r requirements.txt
-          
-          # 5. Restart the App to apply changes
           sudo systemctl restart fastapi_app

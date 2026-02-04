@@ -40,13 +40,13 @@ class Settings(BaseSettings):
     # Firebase/Firestore
     # Production Credentials
     firebase_project_id_prod: str = "vox-translate-b8c94"
-    firebase_credentials_path_prod: str = "./vox-translate-b8c94-firebase-adminsdk-fbsvc-43eee8c143.json"
+    firebase_credentials_path_prod: str = "./vox-translate-b8c94-firebase-adminsdk-fbsvc-7749166547.json"
     firebase_web_api_key_prod: Optional[str] = None
     firebase_web_api_key_generic: Optional[str] = Field(None, alias="firebase_web_api_key")
 
     # Test Credentials
     firebase_project_id_test: str = "olleey-test"
-    firebase_credentials_path_test: str = "./olleey-test-firebase-adminsdk.json"
+    firebase_credentials_path_test: str = "./olleey-test-firebase-adminsdk-fbsvc-c807baae03.json"
     firebase_web_api_key_test: Optional[str] = "AIzaSyBEi-QjTm_3uc5Zf2qaHfG2FkD1DhYGteE"
 
     @property
