@@ -4,10 +4,12 @@ from firebase_admin import auth
 from datetime import datetime
 from typing import Optional
 import httpx
+import asyncio
 
 from config import settings
 from schemas.auth import UserInfo, UserRegisterRequest, UserLoginRequest, TokenResponse, RefreshTokenRequest, GoogleOAuthRequest
 from services.firestore import firestore_service
+from services.demo_simulator import demo_simulator, DEMO_EMAIL, DEMO_PASSWORD
 from middleware.auth import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -227,6 +229,16 @@ async def login_user(request: UserLoginRequest):
                 )
             
             data = response.json()
+            
+            # Initialize demo data if this is demo user
+            if request.email == DEMO_EMAIL:
+                user_id = data.get("localId")
+                if user_id:
+                    print(f"[DEMO] Demo user logged in, ensuring data exists")
+                    # Check if demo data exists, if not create it
+                    projects = firestore_service.list_projects(user_id)
+                    if not projects or len(projects) == 0:
+                        asyncio.create_task(demo_simulator._create_demo_data(user_id))
             
             return TokenResponse(
                 access_token=data["idToken"],
@@ -551,4 +563,36 @@ async def verify_token(
         "valid": True,
         "user_id": current_user["user_id"],
         "email": current_user.get("email")
+    }
+
+
+@router.post("/logout")
+async def logout(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Logout endpoint. For demo users, this resets their data to initial state.
+    
+    Args:
+        current_user: Current authenticated user
+        
+    Returns:
+        dict: Logout confirmation
+    """
+    user_id = current_user["user_id"]
+    
+    # If demo user, reset their data
+    if demo_simulator.is_demo_user(user_id):
+        print(f"[DEMO] Resetting demo data on logout")
+        asyncio.create_task(demo_simulator.reset_demo_data(user_id))
+        return {
+            "success": True,
+            "message": "Demo data will be reset",
+            "is_demo": True
+        }
+    
+    return {
+        "success": True,
+        "message": "Logged out successfully",
+        "is_demo": False
     }

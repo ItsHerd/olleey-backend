@@ -5,9 +5,11 @@ from datetime import datetime
 import re
 import tempfile
 import os
+import asyncio
 
 from services.firestore import firestore_service
 from services.job_queue import enqueue_dubbing_job
+from services.demo_simulator import demo_simulator
 from schemas.jobs import CreateJobRequest, CreateManualJobRequest, ProcessingJobResponse, JobListResponse, LocalizedVideoResponse
 from middleware.auth import get_current_user
 
@@ -628,6 +630,24 @@ async def approve_job(
             detail=f"Job is in state '{job.get('status')}', expected 'waiting_approval'"
         )
 
+    # Check if this is a demo user - simulate approval
+    if demo_simulator.is_demo_user(user_id) or job.get('is_simulation'):
+        print(f"[DEMO] Simulating job approval for {job_id}")
+        # Get all videos for this job to approve them all
+        videos = firestore_service.get_localized_videos_by_job_id(job_id)
+        video_ids = [v['id'] for v in videos if v.get('status') == 'waiting_approval']
+        asyncio.create_task(demo_simulator.simulate_approval(user_id, job_id, video_ids, "approve"))
+        
+        # Log activity
+        firestore_service.log_activity(
+            user_id=user_id,
+            project_id=job.get('project_id'),
+            action="Approved dubbing job (simulated)",
+            details=f"Job {job_id} approved for publishing."
+        )
+        
+        return {"status": "approved", "message": "Job approved (simulation)", "is_demo": True}
+    
     # Import here to avoid potential circular imports if moved to top
     from services.dubbing import publish_dubbed_videos
     
@@ -643,6 +663,69 @@ async def approve_job(
     )
 
     return {"status": "approved", "message": "Job approved for publishing"}
+
+
+@router.post("/{job_id}/videos/approve")
+async def approve_videos(
+    job_id: str,
+    video_ids: List[str],
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Approve specific videos within a job.
+    
+    This allows selective approval of individual language videos.
+    """
+    user_id = current_user["user_id"]
+    
+    # Verify job ownership
+    job = firestore_service.get_processing_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    if job.get('user_id') != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    # Check if demo/simulation
+    if demo_simulator.is_demo_user(user_id) or job.get('is_simulation'):
+        print(f"[DEMO] Simulating video approval: {video_ids}")
+        asyncio.create_task(demo_simulator.simulate_approval(user_id, job_id, video_ids, "approve"))
+        return {"status": "success", "message": f"Approved {len(video_ids)} video(s)", "is_demo": True}
+    
+    # Real approval logic here
+    return {"status": "success", "message": f"Approved {len(video_ids)} video(s)"}
+
+
+@router.post("/{job_id}/videos/reject")
+async def reject_videos(
+    job_id: str,
+    video_ids: List[str],
+    reason: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Reject specific videos within a job.
+    
+    Rejected videos can be reprocessed or marked for manual review.
+    """
+    user_id = current_user["user_id"]
+    
+    # Verify job ownership
+    job = firestore_service.get_processing_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    if job.get('user_id') != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    # Check if demo/simulation
+    if demo_simulator.is_demo_user(user_id) or job.get('is_simulation'):
+        print(f"[DEMO] Simulating video rejection: {video_ids}, reason: {reason}")
+        asyncio.create_task(demo_simulator.simulate_approval(user_id, job_id, video_ids, "reject"))
+        return {"status": "success", "message": f"Rejected {len(video_ids)} video(s)", "is_demo": True}
+    
+    # Real rejection logic here
+    return {"status": "success", "message": f"Rejected {len(video_ids)} video(s)"}
 
 
 @router.get("/{job_id}/videos", response_model=List[LocalizedVideoResponse])
