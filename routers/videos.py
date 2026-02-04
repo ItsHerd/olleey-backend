@@ -114,6 +114,7 @@ async def get_demo_videos_formatted(user_id: str, project_id: Optional[str], lim
                 language_code=lang_code,
                 status=frontend_status,
                 video_id=loc_vid.get('localized_video_id'),
+                job_id=loc_vid.get('job_id'),  # Include job_id for approval flow
                 channel_id=loc_vid.get('channel_id'),
                 published_at=loc_vid.get('published_at') or loc_vid.get('updated_at'),
                 title=loc_vid.get('title'),
@@ -127,16 +128,29 @@ async def get_demo_videos_formatted(user_id: str, project_id: Optional[str], lim
         all_lang_codes = [loc.language_code for loc in localizations]
         published_lang_codes = [loc.language_code for loc in localizations if loc.status == 'live']
         
-        print(f"[DEMO] Video {source_video_id}: {len(localizations)} localizations, {len(published_lang_codes)} published")
+        if published_lang_codes:
+            print(f"[DEMO] Video {source_video_id}: {len(localizations)} localizations, {len(published_lang_codes)} published (status: {job.get('status')}), langs: {published_lang_codes}")
+        else:
+            print(f"[DEMO] Video {source_video_id}: {len(localizations)} localizations, {len(published_lang_codes)} published")
         
+        # Resolve channel info (handle demo jobs storing connection_id)
+        channel_id = job.get('source_channel_id', '')
+        channel_name = "Demo Channel"
+        if channel_id and not str(channel_id).startswith("UC"):
+            # Likely a connection_id; resolve to YouTube channel id
+            conn = firestore_service.get_youtube_connection(channel_id, user_id)
+            if conn:
+                channel_id = conn.get('youtube_channel_id', channel_id)
+                channel_name = conn.get('youtube_channel_name', channel_name)
+
         # Create video item
         video = VideoItem(
             video_id=source_video_id,
             title=first_loc.get('title', f"Video {source_video_id}").split(' (')[0],  # Remove language suffix
             thumbnail_url=first_loc.get('thumbnail_url', f"https://i.ytimg.com/vi/{source_video_id}/hqdefault.jpg"),
             published_at=job.get('created_at', datetime.utcnow()),
-            channel_id=job.get('source_channel_id', ''),
-            channel_name="Demo Channel",
+            channel_id=channel_id,
+            channel_name=channel_name,
             localizations=localizations,
             view_count=sum(1000 * (i+1) for i in range(len(localizations))),  # Mock view counts
             video_type="original",
@@ -146,6 +160,10 @@ async def get_demo_videos_formatted(user_id: str, project_id: Optional[str], lim
             duration=first_loc.get('duration', 210),  # Default 3.5 minutes
             global_views=sum(1000 * (i+1) for i in range(len(published_lang_codes)))
         )
+        
+        # Debug: Print localization statuses
+        loc_statuses = {loc.language_code: loc.status for loc in localizations}
+        print(f"[DEMO] Video {source_video_id} localization statuses: {loc_statuses}")
         
         videos.append(video)
     

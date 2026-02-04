@@ -635,7 +635,14 @@ async def approve_job(
         print(f"[DEMO] Simulating job approval for {job_id}")
         # Get all videos for this job to approve them all
         videos = firestore_service.get_localized_videos_by_job_id(job_id)
+        print(f"[DEMO] Found {len(videos)} videos for job {job_id}")
         video_ids = [v['id'] for v in videos if v.get('status') == 'waiting_approval']
+        print(f"[DEMO] Videos waiting approval: {video_ids}")
+        if not video_ids:
+            print(f"[DEMO] Warning: No videos with 'waiting_approval' status found")
+            # Try to find any videos and approve them anyway
+            video_ids = [v['id'] for v in videos]
+            print(f"[DEMO] Using all video ids: {video_ids}")
         asyncio.create_task(demo_simulator.simulate_approval(user_id, job_id, video_ids, "approve"))
         
         # Log activity

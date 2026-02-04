@@ -3,7 +3,7 @@ import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import firestore as firestore_admin
 from typing import Optional, Dict, List, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import os
 
@@ -209,7 +209,7 @@ class FirestoreService:
             data['id'] = doc.id
             projects.append(data)
         # Sort by created_at in memory
-        projects.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
+        projects.sort(key=lambda x: x.get('created_at', datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
         return projects
 
     def update_project(self, project_id: str, **updates):
@@ -255,7 +255,7 @@ class FirestoreService:
             logs.append(data)
         
         # Sort by timestamp in memory
-        logs.sort(key=lambda x: x.get('timestamp', datetime.min), reverse=True)
+        logs.sort(key=lambda x: x.get('timestamp', datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
         
         return logs[:limit]
 
@@ -315,7 +315,7 @@ class FirestoreService:
             jobs.append(data)
         
         # Sort by created_at in Python (descending - newest first)
-        jobs.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
+        jobs.sort(key=lambda x: x.get('created_at', datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
         
         # Get total count
         total = len(jobs)

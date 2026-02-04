@@ -9,7 +9,11 @@ class LocalizationStatus(BaseModel):
     status: str  # processing, draft, live
     language_code: str
     video_id: Optional[str] = None  # YouTube ID of the localized video if live
-    job_id: Optional[str] = None
+    job_id: Optional[str] = None  # Processing job ID for approval flow
+    channel_id: Optional[str] = None  # Target channel for this language
+    published_at: Optional[datetime] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
 
 
 class VideoItem(BaseModel):

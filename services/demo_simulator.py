@@ -40,6 +40,7 @@ DEMO_CONFIG = {
             "description": "Official music video for Rick Astley's classic hit",
             "thumbnail": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
             "duration": 213,
+            "views": 1400000000,
         },
         {
             "id": "jNQXAC9IVRw",
@@ -47,6 +48,7 @@ DEMO_CONFIG = {
             "description": "The first video ever uploaded to YouTube",
             "thumbnail": "https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg",
             "duration": 19,
+            "views": 280000000,
         },
         {
             "id": "9bZkp7q19f0",
@@ -54,6 +56,7 @@ DEMO_CONFIG = {
             "description": "Official music video for Gangnam Style",
             "thumbnail": "https://i.ytimg.com/vi/9bZkp7q19f0/hqdefault.jpg",
             "duration": 252,
+            "views": 4900000000,
         },
         {
             "id": "kJQP7kiw5Fk",
@@ -61,6 +64,39 @@ DEMO_CONFIG = {
             "description": "Official music video for Despacito",
             "thumbnail": "https://i.ytimg.com/vi/kJQP7kiw5Fk/hqdefault.jpg",
             "duration": 282,
+            "views": 8300000000,
+        },
+        {
+            "id": "OPf0YbXqDm0",
+            "title": "Mark Ronson - Uptown Funk ft. Bruno Mars",
+            "description": "Official music video for Uptown Funk",
+            "thumbnail": "https://i.ytimg.com/vi/OPf0YbXqDm0/hqdefault.jpg",
+            "duration": 269,
+            "views": 4800000000,
+        },
+        {
+            "id": "YQHsXMglC9A",
+            "title": "Adele - Hello",
+            "description": "Official music video for Hello by Adele",
+            "thumbnail": "https://i.ytimg.com/vi/YQHsXMglC9A/hqdefault.jpg",
+            "duration": 367,
+            "views": 3400000000,
+        },
+        {
+            "id": "RgKAFK5djSk",
+            "title": "Wiz Khalifa - See You Again ft. Charlie Puth",
+            "description": "Official music video for See You Again",
+            "thumbnail": "https://i.ytimg.com/vi/RgKAFK5djSk/hqdefault.jpg",
+            "duration": 229,
+            "views": 6200000000,
+        },
+        {
+            "id": "CevxZvSJLk8",
+            "title": "Katy Perry - Roar",
+            "description": "Official music video for Roar",
+            "thumbnail": "https://i.ytimg.com/vi/CevxZvSJLk8/hqdefault.jpg",
+            "duration": 263,
+            "views": 3900000000,
         },
     ]
 }
@@ -178,7 +214,12 @@ class DemoSimulator:
             )
         
         # Create demo jobs
-        await self._create_demo_jobs(user_id, project_workflow, project_music, master_connection_id)
+        await self._create_demo_jobs(
+            user_id,
+            project_workflow,
+            project_music,
+            DEMO_CONFIG["master_channel"]["id"]
+        )
         
         # Create initial activity logs
         self._create_demo_activities(user_id, project_workflow, project_music)
@@ -187,6 +228,9 @@ class DemoSimulator:
     
     async def _create_demo_jobs(self, user_id: str, project_workflow: str, project_music: str, master_channel_id: str):
         """Create demo jobs in various states."""
+        print(f"[DEMO] Creating demo jobs for user {user_id}")
+        print(f"[DEMO] Total source videos available: {len(DEMO_CONFIG['source_videos'])}")
+        
         # Job 1: Waiting Approval (3 languages)
         job_1 = str(uuid.uuid4())
         self.db.collection('processing_jobs').document(job_1).set({
@@ -319,6 +363,89 @@ class DemoSimulator:
         
         for lang in ['es', 'de', 'fr', 'pt', 'ja']:
             self._create_localized_video(job_7, DEMO_CONFIG["source_videos"][3], lang, 'published', user_id)
+        
+        print(f"[DEMO] Jobs 1-7 created. Checking for additional videos...")
+        print(f"[DEMO] Source videos count: {len(DEMO_CONFIG['source_videos'])}")
+        
+        # Job 8: Published (More variety)
+        if len(DEMO_CONFIG["source_videos"]) > 4:
+            job_8 = str(uuid.uuid4())
+            self.db.collection('processing_jobs').document(job_8).set({
+                'source_video_id': DEMO_CONFIG["source_videos"][4]['id'],
+                'source_channel_id': master_channel_id,
+                'user_id': user_id,
+                'project_id': project_workflow,
+                'status': 'completed',
+                'target_languages': ['es', 'fr', 'de'],
+                'progress': 100,
+                'is_simulation': True,
+                'completed_at': firestore_admin.SERVER_TIMESTAMP,
+                'created_at': firestore_admin.SERVER_TIMESTAMP,
+                'updated_at': firestore_admin.SERVER_TIMESTAMP
+            })
+            
+            for lang in ['es', 'fr', 'de']:
+                self._create_localized_video(job_8, DEMO_CONFIG["source_videos"][4], lang, 'published', user_id)
+        
+        # Job 9: Published
+        if len(DEMO_CONFIG["source_videos"]) > 5:
+            job_9 = str(uuid.uuid4())
+            self.db.collection('processing_jobs').document(job_9).set({
+                'source_video_id': DEMO_CONFIG["source_videos"][5]['id'],
+                'source_channel_id': master_channel_id,
+                'user_id': user_id,
+                'project_id': project_workflow,
+                'status': 'completed',
+                'target_languages': ['es', 'it', 'pt'],
+                'progress': 100,
+                'is_simulation': True,
+                'completed_at': firestore_admin.SERVER_TIMESTAMP,
+                'created_at': firestore_admin.SERVER_TIMESTAMP,
+                'updated_at': firestore_admin.SERVER_TIMESTAMP
+            })
+            
+            for lang in ['es', 'it', 'pt']:
+                self._create_localized_video(job_9, DEMO_CONFIG["source_videos"][5], lang, 'published', user_id)
+        
+        # Job 10: Processing (More variety in queue)
+        if len(DEMO_CONFIG["source_videos"]) > 6:
+            job_10 = str(uuid.uuid4())
+            self.db.collection('processing_jobs').document(job_10).set({
+                'source_video_id': DEMO_CONFIG["source_videos"][6]['id'],
+                'source_channel_id': master_channel_id,
+                'user_id': user_id,
+                'project_id': project_workflow,
+                'status': 'processing',
+                'target_languages': ['es', 'de', 'fr'],
+                'progress': 65,
+                'is_simulation': True,
+                'created_at': firestore_admin.SERVER_TIMESTAMP,
+                'updated_at': firestore_admin.SERVER_TIMESTAMP
+            })
+            
+            for lang in ['es', 'de', 'fr']:
+                self._create_localized_video(job_10, DEMO_CONFIG["source_videos"][6], lang, 'processing', user_id)
+        
+        # Job 11: Waiting Approval (More in review queue)
+        if len(DEMO_CONFIG["source_videos"]) > 7:
+            job_11 = str(uuid.uuid4())
+            self.db.collection('processing_jobs').document(job_11).set({
+                'source_video_id': DEMO_CONFIG["source_videos"][7]['id'],
+                'source_channel_id': master_channel_id,
+                'user_id': user_id,
+                'project_id': project_workflow,
+                'status': 'waiting_approval',
+                'target_languages': ['es', 'fr', 'it'],
+                'progress': 100,
+                'is_simulation': True,
+                'created_at': firestore_admin.SERVER_TIMESTAMP,
+                'updated_at': firestore_admin.SERVER_TIMESTAMP
+            })
+            
+            for lang in ['es', 'fr', 'it']:
+                self._create_localized_video(job_11, DEMO_CONFIG["source_videos"][7], lang, 'waiting_approval', user_id)
+        
+        print(f"[DEMO] Finished creating all demo jobs")
     
     def _create_localized_video(self, job_id: str, source_video: Dict, lang_code: str, status: str, user_id: str):
         """Create a localized video."""
@@ -367,6 +494,14 @@ class DemoSimulator:
             {
                 'user_id': user_id,
                 'project_id': project_workflow,
+                'action': 'Videos approved and published',
+                'status': 'success',
+                'details': 'Published 3 language version(s): Spanish, German, French',
+                'timestamp': now - timedelta(hours=5),
+            },
+            {
+                'user_id': user_id,
+                'project_id': project_workflow,
                 'action': 'Video uploaded',
                 'status': 'info',
                 'details': 'Luis Fonsi - Despacito uploaded for dubbing',
@@ -387,6 +522,14 @@ class DemoSimulator:
                 'status': 'success',
                 'details': 'All language versions ready for review',
                 'timestamp': now - timedelta(hours=1, minutes=30),
+            },
+            {
+                'user_id': user_id,
+                'project_id': project_workflow,
+                'action': 'Videos approved and published',
+                'status': 'success',
+                'details': 'Published 4 language version(s): Spanish, French, Italian, Portuguese',
+                'timestamp': now - timedelta(hours=1),
             },
             {
                 'user_id': user_id,
@@ -419,6 +562,14 @@ class DemoSimulator:
                 'status': 'success',
                 'details': 'Spanish, German, and Italian versions ready',
                 'timestamp': now - timedelta(minutes=5),
+            },
+            {
+                'user_id': user_id,
+                'project_id': project_workflow,
+                'action': 'Videos approved and published',
+                'status': 'success',
+                'details': 'Published 5 language version(s): Spanish, German, French, Portuguese, Japanese',
+                'timestamp': now - timedelta(minutes=2),
             },
         ]
         
