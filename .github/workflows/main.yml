@@ -1,0 +1,30 @@
+name: Deploy FastAPI to GCP
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Deploy via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SSH_HOST }}
+        username: ${{ secrets.SSH_USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        script: |
+          # UPDATED PATH: Matches your actual server folder
+          cd /home/moltafet_ahmad2015/olleey-backend
+          
+          # Reset and Pull
+          git reset --hard origin/main
+          git pull origin main
+          
+          # Install dependencies
+          source venv/bin/activate
+          pip install -r requirements.txt
+          
+          # Restart the service
+          sudo systemctl restart fastapi_app
