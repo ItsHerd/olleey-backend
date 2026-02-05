@@ -35,6 +35,19 @@ DEMO_CONFIG = {
     ],
     "source_videos": [
         {
+            "id": "demo_real_video_001",
+            "title": "The Nature of Startups with YC CEO",
+            "title_es": "La Naturaleza de las Startups con el CEO de YC",
+            "description": "In-depth discussion about the fundamental nature of startups and what it takes to build something people want.",
+            "description_es": "Discusión profunda sobre la naturaleza fundamental de las startups y lo que se necesita para construir algo que la gente quiera.",
+            "thumbnail": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+            "duration": 180,
+            "views": 2500,
+            "storage_url": "https://olleey-videos.s3.us-west-1.amazonaws.com/en.mp4",
+            "audio_url_es": "https://olleey-videos.s3.us-west-1.amazonaws.com/es-audio.mp3",
+            "video_url_es": "https://olleey-videos.s3.us-west-1.amazonaws.com/es.mov"
+        },
+        {
             "id": "dQw4w9WgXcQ",
             "title": "Never Gonna Give You Up - Rick Astley",
             "description": "Official music video for Rick Astley's classic hit",
@@ -458,7 +471,11 @@ class DemoSimulator:
         localized_video_id = None
         
         if status in ['waiting_approval', 'published']:
-            storage_url = f"gs://demo-bucket/videos/{job_id}/{lang_code}/output.mp4"
+            # Use S3 URL for real demo video's Spanish localization
+            if source_video['id'] == 'demo_real_video_001' and lang_code == 'es':
+                storage_url = "https://olleey-videos.s3.us-west-1.amazonaws.com/es.mov"
+            else:
+                storage_url = f"gs://demo-bucket/videos/{job_id}/{lang_code}/output.mp4"
         
         if status == 'published':
             localized_video_id = f"VID{uuid.uuid4().hex[:10]}"
@@ -764,6 +781,141 @@ class DemoSimulator:
                 break
             
             await self.simulate_processing_progress(user_id, job_id)
+    
+    async def start_processing(self, user_id: str, job_id: str, language_code: str = 'es') -> Dict[str, Any]:
+        """
+        Start processing a queued job (3-4 second simulation).
+        
+        Simulates the dubbing workflow with realistic timing.
+        """
+        # Update job to processing
+        job_ref = self.db.collection('processing_jobs').document(job_id)
+        job_ref.update({
+            'status': 'processing',
+            'progress': 0,
+            'updated_at': firestore_admin.SERVER_TIMESTAMP
+        })
+        
+        # Update localized video to processing
+        localized_videos = self.db.collection('localized_videos')
+        query = firestore_service._where(localized_videos, 'job_id', '==', job_id)
+        query = firestore_service._where(query, 'language_code', '==', language_code)
+        
+        for doc in query.stream():
+            doc.reference.update({
+                'status': 'processing',
+                'updated_at': firestore_admin.SERVER_TIMESTAMP
+            })
+        
+        # Simulate processing delay (3.5 seconds)
+        await asyncio.sleep(3.5)
+        
+        # Move to draft/waiting_approval with processed content
+        job_ref.update({
+            'status': 'waiting_approval',
+            'progress': 100,
+            'updated_at': firestore_admin.SERVER_TIMESTAMP
+        })
+        
+        for doc in query.stream():
+            doc.reference.update({
+                'status': 'waiting_approval',
+                'storage_url': 'https://olleey-videos.s3.us-west-1.amazonaws.com/es.mov',
+                'dubbed_audio_url': 'https://olleey-videos.s3.us-west-1.amazonaws.com/es-audio.mp3',
+                'updated_at': firestore_admin.SERVER_TIMESTAMP
+            })
+        
+        return {"success": True, "status": "waiting_approval"}
+    
+    async def update_localization_status(
+        self,
+        user_id: str,
+        job_id: str,
+        language_code: str,
+        new_status: str
+    ) -> Dict[str, Any]:
+        """
+        Update localization status interactively for demo.
+        Supports: queued, processing, waiting_approval (draft), published (live)
+        """
+        # Validate status
+        valid_statuses = ['queued', 'processing', 'waiting_approval', 'published']
+        if new_status not in valid_statuses:
+            raise ValueError(f"Invalid status: {new_status}")
+        
+        # Update localized video in Firestore
+        localized_videos = self.db.collection('localized_videos')
+        query = firestore_service._where(localized_videos, 'job_id', '==', job_id)
+        query = firestore_service._where(query, 'language_code', '==', language_code)
+        
+        updated = False
+        for doc in query.stream():
+            doc.reference.update({
+                'status': new_status,
+                'updated_at': firestore_admin.SERVER_TIMESTAMP
+            })
+            
+            # If publishing, add localized_video_id and storage URL
+            if new_status == 'published':
+                updates = {
+                    'localized_video_id': f"demo_{language_code}_{uuid.uuid4().hex[:8]}",
+                    'published_at': firestore_admin.SERVER_TIMESTAMP
+                }
+                # Use S3 URL for Spanish, placeholder for others
+                if language_code == 'es':
+                    updates['storage_url'] = "https://olleey-videos.s3.us-west-1.amazonaws.com/es.mov"
+                else:
+                    updates['storage_url'] = f"gs://demo-bucket/videos/{job_id}/{language_code}/output.mp4"
+                doc.reference.update(updates)
+            elif new_status == 'waiting_approval':
+                # Set storage URL for waiting approval
+                if language_code == 'es':
+                    doc.reference.update({
+                        'storage_url': "https://olleey-videos.s3.us-west-1.amazonaws.com/es.mov"
+                    })
+                else:
+                    doc.reference.update({
+                        'storage_url': f"gs://demo-bucket/videos/{job_id}/{language_code}/output.mp4"
+                    })
+            
+            updated = True
+        
+        if not updated:
+            raise ValueError(f"No localized video found for job_id={job_id}, language_code={language_code}")
+        
+        # Update job status if needed
+        if new_status == 'published':
+            # Check if all localizations are published
+            all_videos_query = firestore_service._where(localized_videos, 'job_id', '==', job_id)
+            all_videos = list(all_videos_query.stream())
+            if all(v.to_dict().get('status') == 'published' for v in all_videos):
+                jobs = self.db.collection('processing_jobs')
+                jobs.document(job_id).update({
+                    'status': 'completed',
+                    'progress': 100,
+                    'completed_at': firestore_admin.SERVER_TIMESTAMP,
+                    'updated_at': firestore_admin.SERVER_TIMESTAMP
+                })
+        elif new_status == 'waiting_approval':
+            # Update job to waiting_approval if it's processing
+            job_ref = self.db.collection('processing_jobs').document(job_id)
+            job = job_ref.get()
+            if job.exists and job.to_dict().get('status') == 'processing':
+                job_ref.update({
+                    'status': 'waiting_approval',
+                    'progress': 100,
+                    'updated_at': firestore_admin.SERVER_TIMESTAMP
+                })
+        elif new_status == 'processing':
+            # Update job to processing
+            job_ref = self.db.collection('processing_jobs').document(job_id)
+            job_ref.update({
+                'status': 'processing',
+                'progress': 50,
+                'updated_at': firestore_admin.SERVER_TIMESTAMP
+            })
+        
+        return {"success": True, "status": new_status}
 
 
 # Global simulator instance

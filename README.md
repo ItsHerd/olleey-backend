@@ -57,23 +57,61 @@ The database will be automatically initialized on first run. For SQLite, a file 
 
 ### 5. Run the Application
 
-**With hot reload (recommended for development):**
+**Option 1: Using the development script (recommended - avoids venv reload loops):**
 ```bash
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+python3 dev_server.py
 ```
 
-**Or run directly:**
+**Option 2: Using the shell script:**
+```bash
+./start_dev.sh
+```
+
+**Option 3: Direct uvicorn with specific watch directories:**
+```bash
+python3 -m uvicorn main:app --reload \
+  --reload-dir ./routers --reload-dir ./services --reload-dir ./schemas \
+  --reload-dir ./middleware --reload-dir ./utils \
+  --host 0.0.0.0 --port 8000
+```
+
+**Option 4: Run directly without hot reload:**
 ```bash
 python main.py
 ```
 
 The API will be available at `http://localhost:8000`
 
-**Hot reload is enabled** - the server automatically restarts when you make code changes.
+**Note:** The recommended methods (Options 1-2) prevent the server from watching the `venv` directory, which causes unnecessary reload loops.
+
+### Python Version Warnings
+
+If you see warnings about Python 3.9 being past end-of-life, consider upgrading:
+
+```bash
+# Install Python 3.11 or 3.12 using Homebrew (macOS)
+brew install python@3.11
+
+# Create a new virtual environment with the newer Python
+python3.11 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+This will eliminate FutureWarnings from Google packages and improve security/compatibility.
 
 See [START.md](START.md) for detailed startup instructions.
 
 ## API Endpoints
+
+### Storage
+
+The backend supports both **local file storage** and **AWS S3** storage:
+
+- **Local Storage** (default): Files stored in `./storage/` directory
+- **S3 Storage**: Files stored in AWS S3 bucket with presigned URLs
+
+To switch between storage types, set `STORAGE_TYPE=s3` in your `.env` file. See [S3_INTEGRATION.md](S3_INTEGRATION.md) for detailed setup instructions.
 
 ### Authentication
 

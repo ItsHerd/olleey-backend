@@ -7,7 +7,7 @@ import tempfile
 import os
 import asyncio
 
-from services.firestore import firestore_service
+from services.firestore import firestore_service, firestore_admin
 from services.job_queue import enqueue_dubbing_job
 from services.demo_simulator import demo_simulator
 from schemas.jobs import CreateJobRequest, CreateManualJobRequest, ProcessingJobResponse, JobListResponse, LocalizedVideoResponse
@@ -733,6 +733,119 @@ async def reject_videos(
     
     # Real rejection logic here
     return {"status": "success", "message": f"Rejected {len(video_ids)} video(s)"}
+
+
+@router.post("/{job_id}/videos/{language_code}/status")
+async def update_demo_video_status(
+    job_id: str,
+    language_code: str,
+    new_status: str = Query(..., regex="^(processing|waiting_approval|published)$"),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Update video status for demo users (interactive demo control).
+    
+    This endpoint allows demo users to interactively change the status of localized videos
+    to test different workflow states: processing → waiting_approval (draft) → published (live)
+    
+    Only available for demo@olleey.com user.
+    """
+    from services.demo_simulator import DEMO_EMAIL
+    
+    user_id = current_user["user_id"]
+    email = current_user.get("email")
+    
+    # Only allow for demo users
+    if email != DEMO_EMAIL:
+        raise HTTPException(status_code=403, detail="Only available in demo mode")
+    
+    try:
+        result = await demo_simulator.update_localization_status(
+            user_id=user_id,
+            job_id=job_id,
+            language_code=language_code,
+            new_status=new_status
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update status: {str(e)}")
+
+
+@router.post("/{job_id}/start-processing")
+async def start_demo_processing(
+    job_id: str,
+    language_code: str = Query(default='es'),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Start processing for queued demo job.
+    Simulates 3-4 second processing before moving to draft/review state.
+    
+    Demo only - requires demo@olleey.com user.
+    """
+    from services.demo_simulator import DEMO_EMAIL
+    
+    user_id = current_user["user_id"]
+    email = current_user.get("email")
+    
+    # Only allow for demo users
+    if email != DEMO_EMAIL:
+        raise HTTPException(status_code=403, detail="Only available in demo mode")
+    
+    try:
+        result = await demo_simulator.start_processing(
+            user_id=user_id,
+            job_id=job_id,
+            language_code=language_code
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start processing: {str(e)}")
+
+
+@router.post("/{job_id}/pause")
+async def pause_demo_job(
+    job_id: str,
+    language_code: str = Query(default='es'),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Pause job - return to queued state.
+    Allows user to stop review and return video to queue.
+    
+    Demo only - requires demo@olleey.com user.
+    """
+    from services.demo_simulator import DEMO_EMAIL
+    
+    user_id = current_user["user_id"]
+    email = current_user.get("email")
+    
+    # Only allow for demo users
+    if email != DEMO_EMAIL:
+        raise HTTPException(status_code=403, detail="Only available in demo mode")
+    
+    try:
+        # Move back to queued
+        result = await demo_simulator.update_localization_status(
+            user_id=user_id,
+            job_id=job_id,
+            language_code=language_code,
+            new_status='queued'
+        )
+        
+        # Also update job status
+        job_ref = demo_simulator.db.collection('processing_jobs').document(job_id)
+        job_ref.update({
+            'status': 'queued',
+            'progress': 0,
+            'updated_at': firestore_admin.SERVER_TIMESTAMP
+        })
+        
+        return {"success": True, "status": "paused"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to pause job: {str(e)}")
 
 
 @router.get("/{job_id}/videos", response_model=List[LocalizedVideoResponse])

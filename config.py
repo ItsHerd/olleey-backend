@@ -76,8 +76,17 @@ class Settings(BaseSettings):
             return self.firebase_web_api_key_test
         return self.firebase_web_api_key_prod
     
-    # Local Storage
+    # Storage Configuration
+    storage_type: str = "local"  # Options: "local" or "s3"
     local_storage_dir: str = "./storage"  # Directory for storing processed videos locally
+    
+    # AWS S3 Configuration (used when storage_type="s3")
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_region: str = "us-west-1"
+    aws_s3_bucket: Optional[str] = None
+    s3_presigned_url_expiry: int = 3600  # Presigned URL expiry in seconds
+    cloudfront_url: Optional[str] = None  # Optional CloudFront CDN URL
     
     # OAuth Scopes
     use_mock_db: bool = False

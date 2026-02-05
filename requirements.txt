@@ -14,3 +14,5 @@ firebase-admin==6.4.0
 passlib[bcrypt]==1.7.4
 python-jose[cryptography]==3.3.0
 syncsdk>=0.2.7
+boto3==1.34.34
+botocore==1.34.34

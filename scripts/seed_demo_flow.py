@@ -319,6 +319,53 @@ def seed_demo_data(user_id: str, projects: List[Dict], channels: List[Dict]):
     jobs_created.append({"id": job_1, "status": "completed", "video": SOURCE_VIDEOS[0]['title']})
     print(f"✅ Created completed job: {job_1}")
     
+    # Real Video Scenario: The Nature of Startups with YC CEO (EN → ES) - QUEUED STATE
+    print("\n🎬 Real Video: The Nature of Startups with YC CEO (EN → ES) - QUEUED")
+    
+    # Create the job in queued state
+    job_id_real = str(uuid.uuid4())
+    job_data_real = {
+        'source_video_id': 'demo_real_video_001',
+        'source_channel_id': MASTER_CHANNEL['id'],
+        'user_id': user_id,
+        'project_id': projects[2]['id'],  # Demo Workflow project
+        'status': 'queued',
+        'target_languages': ['es'],
+        'progress': 0,
+        'error_message': None,
+        'created_at': firestore.SERVER_TIMESTAMP,
+        'updated_at': firestore.SERVER_TIMESTAMP
+    }
+    firestore_service.db.collection('processing_jobs').document(job_id_real).set(job_data_real)
+    
+    # Create localized video in queued state with full metadata
+    video_id_real = str(uuid.uuid4())
+    video_data_real = {
+        'job_id': job_id_real,
+        'source_video_id': 'demo_real_video_001',
+        'localized_video_id': None,
+        'language_code': 'es',
+        'channel_id': 'UCdemo_spanish',
+        'user_id': user_id,
+        'status': 'queued',
+        'storage_url': None,  # Will be assigned after processing
+        'dubbed_audio_url': None,  # Will be assigned after processing
+        'thumbnail_url': 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+        'title': 'The Nature of Startups with YC CEO',
+        'title_translated': 'La Naturaleza de las Startups con el CEO de YC',
+        'description': 'In-depth discussion about the fundamental nature of startups and what it takes to build something people want.',
+        'description_translated': 'Discusión profunda sobre la naturaleza fundamental de las startups y lo que se necesita para construir algo que la gente quiera.',
+        'created_at': firestore.SERVER_TIMESTAMP,
+        'updated_at': firestore.SERVER_TIMESTAMP
+    }
+    firestore_service.db.collection('localized_videos').document(video_id_real).set(video_data_real)
+    
+    jobs_created.append({"id": job_id_real, "status": "queued", "video": "The Nature of Startups with YC CEO"})
+    print(f"✅ Created queued real video job: {job_id_real}")
+    print(f"   This video will appear in Queue & Review with purple 'Queued' badge")
+    print(f"   Clicking it will trigger processing simulation (3-4 seconds)")
+    print(f"   After processing, it will move to draft for review with S3 video/audio")
+    
     # Scenario 2: Waiting Approval - Ready for review
     print("\n⏳ Scenario 2: Job waiting for approval")
     job_2 = create_job_with_videos(
