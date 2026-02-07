@@ -299,32 +299,35 @@ class FirestoreService:
                            limit: int = 20, offset: int = 0, project_id: Optional[str] = None) -> tuple[List[Dict[str, Any]], int]:
         """List processing jobs for user, optionally filtered by project."""
         query = self._where(self.db.collection('processing_jobs'), 'user_id', '==', user_id)
-        
+
         if project_id:
             query = self._where(query, 'project_id', '==', project_id)
-            
+
         if status:
             query = self._where(query, 'status', '==', status)
-        
+
         # Get all matching documents (without order_by to avoid index requirement)
         # We'll sort in-memory instead
         jobs = []
         for doc in query.stream():
             data = doc.to_dict()
             data['id'] = doc.id
+            # Filter out cancelled jobs unless explicitly requested
+            if status != 'cancelled' and data.get('status') == 'cancelled':
+                continue
             jobs.append(data)
-        
+
         # Sort by created_at in Python (descending - newest first)
         jobs.sort(key=lambda x: x.get('created_at', datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
-        
+
         # Get total count
         total = len(jobs)
-        
+
         # Apply pagination in Python
         start = offset
         end = offset + limit
         jobs = jobs[start:end]
-        
+
         return jobs, total
     
     def get_job_by_video(self, source_video_id: str, user_id: str) -> Optional[Dict[str, Any]]:
@@ -564,7 +567,39 @@ class FirestoreService:
                 results.append({'id': doc.id, **doc.to_dict()})
                 
         return results
-    
+
+    # Uploaded Videos operations
+    def get_uploaded_videos(self, user_id: str, project_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get uploaded videos for a user."""
+        query = self._where(self.db.collection('uploaded_videos'), 'user_id', '==', user_id)
+
+        if project_id:
+            query = self._where(query, 'project_id', '==', project_id)
+
+        # Note: Removed order_by to avoid requiring a Firestore composite index
+        # Videos will be ordered in application code if needed
+        query = query.limit(limit)
+
+        docs = query.stream()
+        videos = []
+        for doc in docs:
+            data = doc.to_dict()
+            data['id'] = doc.id
+            videos.append(data)
+
+        # Sort in Python to avoid Firestore index requirement
+        videos.sort(key=lambda x: x.get('uploaded_at', ''), reverse=True)
+        return videos
+
+    def get_uploaded_video(self, video_id: str) -> Optional[Dict[str, Any]]:
+        """Get a specific uploaded video by ID."""
+        doc = self.db.collection('uploaded_videos').document(video_id).get()
+        if doc.exists:
+            data = doc.to_dict()
+            data['id'] = doc.id
+            return data
+        return None
+
     # YouTube Connection operations
     def create_youtube_connection(self, user_id: str, youtube_channel_id: str,
                                   access_token: str, refresh_token: str,

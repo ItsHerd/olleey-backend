@@ -80,6 +80,7 @@ async def get_activity_feed(
             'id': log.get('id', 'unknown'),
             'message': message,
             'time': get_relative_time(timestamp),
+            'timestamp': timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp),
             'icon': get_icon_for_action(action, status),
             'color': 'green' if status == 'success' else 'yellow' if status == 'warning' else 'red' if status == 'error' else 'blue',
             'type': status

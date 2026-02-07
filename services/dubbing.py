@@ -307,21 +307,39 @@ async def simulate_dubbing_job(job_id: str):
         user_id = job.get('user_id')
         source_video_id = job.get('source_video_id')
         target_languages = job.get('target_languages', [])
-        
+
         print(f"[SIMULATION] Starting simulation for job {job_id}")
-        
+
+        # Get source video metadata (uploaded video or YouTube video)
+        source_video = firestore_service.get_uploaded_video(source_video_id)
+        source_title = None
+        source_thumbnail = None
+        source_description = None
+        source_storage_url = None
+
+        if source_video:
+            # This is an uploaded video
+            source_title = source_video.get('title')
+            source_thumbnail = source_video.get('thumbnail_url')
+            source_description = source_video.get('description', '')
+            source_storage_url = source_video.get('storage_url')
+            print(f"[SIMULATION] Using uploaded video: {source_title}")
+        else:
+            # Fallback to YouTube-style mock
+            source_title = f"Video {source_video_id}"
+            source_thumbnail = f"https://i.ytimg.com/vi/{source_video_id}/hqdefault.jpg"
+            source_description = ""
+            print(f"[SIMULATION] No uploaded video found, using defaults")
+
         # 1. Simulate Downloading (0-10%)
         time_step = 0.5  # Seconds per step
         await update_job_status_and_notify(job_id, status='downloading', progress=10)
         await asyncio.sleep(time_step * 2)
-        
+
         # 2. Simulate Processing (10-90%)
         # Calculate steps based on languages
         progress_per_lang = 80 / max(len(target_languages), 1)
         current_progress = 10
-        
-        # Mock source video thumbnail
-        mock_thumbnail = f"https://i.ytimg.com/vi/{source_video_id}/hqdefault.jpg" if source_video_id else None
         
         for lang in target_languages:
             # Simulate ElevenLabs & Veo processing time
@@ -333,13 +351,23 @@ async def simulate_dubbing_job(job_id: str):
             await asyncio.sleep(time_step)
             
             current_progress += progress_per_lang / 2
-            
+
             # Create localized video record
-            language_name = lang.upper() # In real app we map code to name
-            
-            # Use mock storage URL
-            mock_storage_url = f"/storage/videos/mock_dub_{lang}_{uuid.uuid4().hex[:6]}.mp4"
-            
+            # Map language code to name
+            language_names = {
+                'es': 'Spanish', 'fr': 'French', 'de': 'German', 'pt': 'Portuguese',
+                'it': 'Italian', 'ja': 'Japanese', 'ko': 'Korean', 'zh': 'Chinese',
+                'ar': 'Arabic', 'hi': 'Hindi', 'ru': 'Russian', 'nl': 'Dutch'
+            }
+            language_name = language_names.get(lang, lang.upper())
+
+            # Use source video storage URL or create mock URL
+            if source_storage_url:
+                # Copy/reference the uploaded video (in real implementation, would be dubbed version)
+                localized_storage_url = source_storage_url.replace('/original/', f'/{lang}/')
+            else:
+                localized_storage_url = f"/storage/videos/mock_dub_{lang}_{uuid.uuid4().hex[:6]}.mp4"
+
             channel_id = ''
             language_channel = firestore_service.get_language_channel_by_language(
                 user_id=user_id,
@@ -347,19 +375,23 @@ async def simulate_dubbing_job(job_id: str):
             )
             if language_channel:
                 channel_id = language_channel.get('channel_id', '')
-                
+
+            # Use actual source video title and thumbnail
+            localized_title = f"{source_title} ({language_name})" if source_title else f"Video ({lang})"
+            localized_description = source_description or f"Localized version in {language_name}"
+
             firestore_service.create_localized_video(
                 job_id=job_id,
-                user_id=user_id,  # Added user_id
+                user_id=user_id,
                 source_video_id=source_video_id,
                 language_code=lang,
                 channel_id=channel_id,
                 status='waiting_approval',
-                storage_url=mock_storage_url,
-                thumbnail_url=mock_thumbnail,
+                storage_url=localized_storage_url,
+                thumbnail_url=source_thumbnail,  # Use actual thumbnail
                 dubbed_audio_url=f"/storage/audios/mock_dub_{lang}_{uuid.uuid4().hex[:6]}.mp3",
-                title=f"Simulated Title {source_video_id} ({lang})",
-                description=f"This is a simulated translated description for language {lang}."
+                title=localized_title,  # Use actual title with language suffix
+                description=localized_description
             )
             
             # Log activity

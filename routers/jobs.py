@@ -848,6 +848,83 @@ async def pause_demo_job(
         raise HTTPException(status_code=500, detail=f"Failed to pause job: {str(e)}")
 
 
+@router.delete("/{job_id}")
+async def cancel_job(
+    job_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Cancel/delete a dubbing job.
+
+    This will:
+    1. Update the job status to 'cancelled'
+    2. Update all associated localized videos to 'cancelled' status
+    3. Log the cancellation activity
+
+    Args:
+        job_id: Job ID to cancel
+        current_user: Current authenticated user
+
+    Returns:
+        Success message
+
+    Raises:
+        HTTPException: If job not found or user not authorized
+    """
+    user_id = current_user["user_id"]
+
+    # Verify job ownership
+    job = firestore_service.get_processing_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found"
+        )
+
+    if job.get('user_id') != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to cancel this job"
+        )
+
+    try:
+        # Update job status to cancelled
+        job_ref = firestore_service.db.collection('processing_jobs').document(job_id)
+        job_ref.update({
+            'status': 'cancelled',
+            'updated_at': firestore_admin.SERVER_TIMESTAMP
+        })
+
+        # Update all associated localized videos to cancelled
+        videos = firestore_service.get_localized_videos_by_job_id(job_id)
+        for video in videos:
+            video_ref = firestore_service.db.collection('localized_videos').document(video['id'])
+            video_ref.update({
+                'status': 'cancelled',
+                'updated_at': firestore_admin.SERVER_TIMESTAMP
+            })
+
+        # Log activity
+        firestore_service.log_activity(
+            user_id=user_id,
+            project_id=job.get('project_id'),
+            action="Cancelled dubbing job",
+            details=f"Job {job_id} was cancelled by user."
+        )
+
+        return {
+            "success": True,
+            "message": f"Job {job_id} cancelled successfully",
+            "cancelled_videos": len(videos)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to cancel job: {str(e)}"
+        )
+
+
 @router.get("/{job_id}/videos", response_model=List[LocalizedVideoResponse])
 async def get_job_videos(
     job_id: str,
@@ -855,44 +932,44 @@ async def get_job_videos(
 ):
     """
     Get all localized videos for a specific job.
-    
+
     This is used by the frontend to fetch video previews for approval.
     """
     user_id = current_user["user_id"]
-    
+
     # Verify job ownership
     job = firestore_service.get_processing_job(job_id)
     if not job:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail="Job not found"
         )
-        
+
     if job.get('user_id') != user_id:
         raise HTTPException(
-            status_code=403, 
+            status_code=403,
             detail="Not authorized to access this job"
         )
-        
+
     # Get localized videos
     videos = firestore_service.get_localized_videos_by_job_id(job_id)
-    
+
     # Convert timestamps and format response
     response = []
     for vid in videos:
         created_at = vid.get('created_at')
         updated_at = vid.get('updated_at')
-        
+
         if hasattr(created_at, 'timestamp'):
             created_at = datetime.fromtimestamp(created_at.timestamp())
         elif isinstance(created_at, (int, float)):
             created_at = datetime.fromtimestamp(created_at)
-            
+
         if hasattr(updated_at, 'timestamp'):
             updated_at = datetime.fromtimestamp(updated_at.timestamp())
         elif isinstance(updated_at, (int, float)):
             updated_at = datetime.fromtimestamp(updated_at)
-            
+
         response.append(LocalizedVideoResponse(
             id=vid['id'],
             job_id=vid.get('job_id'),
@@ -907,5 +984,5 @@ async def get_job_videos(
             created_at=created_at or datetime.utcnow(),
             updated_at=updated_at or datetime.utcnow()
         ))
-        
+
     return response

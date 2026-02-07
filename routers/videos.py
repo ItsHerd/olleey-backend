@@ -9,6 +9,10 @@ import asyncio
 import tempfile
 import os
 import httpx
+import uuid
+import shutil
+import logging
+import traceback
 from datetime import datetime, timedelta
 
 from services.firestore import firestore_service
@@ -144,10 +148,12 @@ async def get_demo_videos_formatted(user_id: str, project_id: Optional[str], lim
                 channel_name = conn.get('youtube_channel_name', channel_name)
 
         # Create video item
+        thumbnail = first_loc.get('thumbnail_url') or f"https://i.ytimg.com/vi/{source_video_id}/hqdefault.jpg"
+
         video = VideoItem(
             video_id=source_video_id,
             title=first_loc.get('title', f"Video {source_video_id}").split(' (')[0],  # Remove language suffix
-            thumbnail_url=first_loc.get('thumbnail_url', f"https://i.ytimg.com/vi/{source_video_id}/hqdefault.jpg"),
+            thumbnail_url=thumbnail,
             published_at=job.get('created_at', datetime.utcnow()),
             channel_id=channel_id,
             channel_name=channel_name,
@@ -188,30 +194,106 @@ async def list_videos(
     current_user: dict = Depends(get_current_user)
 ) -> VideoListResponse:
     """
-    Fetch authenticated user's uploaded videos from YouTube with filtering.
+    Fetch authenticated user's videos including:
+    - Uploaded videos from local/S3 storage
+    - YouTube videos
+    - Localized/dubbed videos
     """
     user_id = current_user["user_id"]
-    
+
     # Check if demo user - return demo data in expected format
     from services.demo_simulator import demo_simulator
     if demo_simulator.is_demo_user(user_id):
         return await get_demo_videos_formatted(user_id, project_id, limit)
-    
+
     try:
+        # FIRST: Get uploaded videos from Firestore (videos uploaded via /videos/upload)
+        uploaded_videos = firestore_service.get_uploaded_videos(user_id, project_id, limit)
+
+        # Get localizations for uploaded videos
+        all_localized = firestore_service.get_all_localized_videos_for_user(user_id)
+        all_jobs, _ = firestore_service.list_processing_jobs(user_id, limit=100, project_id=project_id)
+
+        # Maps for quick lookup
+        localized_map = defaultdict(list)  # source_id -> [localized_docs]
+        for loc in all_localized:
+            if loc.get('source_video_id'):
+                localized_map[loc['source_video_id']].append(loc)
+
+        jobs_map = defaultdict(list)  # source_id -> [job_docs]
+        for j in all_jobs:
+            if j.get('source_video_id'):
+                jobs_map[j['source_video_id']].append(j)
+
+        final_videos = []
+
+        # Add uploaded videos to results
+        for uploaded_video in uploaded_videos:
+            video_id = uploaded_video.get('video_id')
+
+            # Get localizations for this video
+            localizations = []
+            for loc in localized_map.get(video_id, []):
+                localizations.append(LocalizationStatus(
+                    language_code=loc.get('language_code', ''),
+                    status=loc.get('status', 'live'),
+                    video_id=loc.get('localized_video_id'),
+                    job_id=loc.get('job_id')
+                ))
+
+            # Add in-progress jobs
+            for j in jobs_map.get(video_id, []):
+                live_langs = [l.language_code for l in localizations]
+                for lang in j.get('target_languages', []):
+                    if lang not in live_langs:
+                        localizations.append(LocalizationStatus(
+                            language_code=lang,
+                            status='processing',
+                            job_id=j.get('id')
+                        ))
+
+            # Filter by type if requested
+            if video_type != "all" and video_type != "original":
+                continue
+
+            # Create video item from uploaded video
+            video_item = VideoItem(
+                video_id=video_id,
+                title=uploaded_video.get('title', 'Untitled'),
+                thumbnail_url=uploaded_video.get('thumbnail_url', ''),
+                published_at=uploaded_video.get('uploaded_at', datetime.utcnow()),
+                view_count=0,  # No views for uploaded videos
+                channel_id=uploaded_video.get('channel_id', ''),
+                channel_name=uploaded_video.get('channel_name', 'Uploaded'),
+                video_type="original",
+                source_video_id=None,
+                localizations=localizations,
+                translated_languages=[l.language_code for l in localizations if l.status == 'live']
+            )
+            final_videos.append(video_item)
+
+        # If we've reached the limit with uploaded videos, return early
+        if len(final_videos) >= limit:
+            return VideoListResponse(videos=final_videos[:limit], total=len(final_videos))
+
+        # SECOND: Try to get YouTube videos (if connected)
+        remaining_limit = limit - len(final_videos)
+
         # Get YouTube service
         youtube = await asyncio.to_thread(get_youtube_service, user_id, None, False)
-        
+
         if youtube is None:
-            # Handle mock mode
-            mock_resp = await get_mock_videos(user_id, limit)
+            # Handle mock mode - add mock videos to existing uploaded videos
+            mock_resp = await get_mock_videos(user_id, remaining_limit)
             # Apply filters to mock data
-            filtered_videos = mock_resp.videos
+            filtered_mock_videos = mock_resp.videos
             if video_type != "all":
-                filtered_videos = [v for v in filtered_videos if v.video_type == video_type]
+                filtered_mock_videos = [v for v in filtered_mock_videos if v.video_type == video_type]
             if channel_id:
-                filtered_videos = [v for v in filtered_videos if v.channel_id == channel_id]
-            # No project filtering for mock for now
-            return VideoListResponse(videos=filtered_videos, total=len(filtered_videos))
+                filtered_mock_videos = [v for v in filtered_mock_videos if v.channel_id == channel_id]
+            # Combine with uploaded videos
+            final_videos.extend(filtered_mock_videos[:remaining_limit])
+            return VideoListResponse(videos=final_videos, total=len(final_videos))
         
         # Determine which playlist to fetch from
         if channel_id:
@@ -239,11 +321,11 @@ async def list_videos(
         # Get videos from uploads playlist
         playlist_items = []
         next_page_token = None
-        while len(playlist_items) < limit:
+        while len(playlist_items) < remaining_limit:
             request_params = {
                 'part': 'snippet,contentDetails',
                 'playlistId': uploads_playlist_id,
-                'maxResults': min(limit - len(playlist_items), 50)
+                'maxResults': min(remaining_limit - len(playlist_items), 50)
             }
             if next_page_token:
                 request_params['pageToken'] = next_page_token
@@ -257,10 +339,11 @@ async def list_videos(
                 break
         
         if not playlist_items:
-            return VideoListResponse(videos=[], total=0)
-        
-        video_ids = [item['contentDetails']['videoId'] for item in playlist_items[:limit]]
-        
+            # No YouTube videos, return just uploaded videos
+            return VideoListResponse(videos=final_videos, total=len(final_videos))
+
+        video_ids = [item['contentDetails']['videoId'] for item in playlist_items[:remaining_limit]]
+
         # Get full video details INCLUDING statistics (views)
         videos_response = await asyncio.to_thread(
             youtube.videos().list(
@@ -268,23 +351,9 @@ async def list_videos(
                 id=','.join(video_ids)
             ).execute
         )
-        
-        # Fetch status data from Firestore
-        all_localized = firestore_service.get_all_localized_videos_for_user(user_id)
-        all_jobs, _ = firestore_service.list_processing_jobs(user_id, limit=100, project_id=project_id)
-        
-        # Maps for quick lookup
-        localized_map = defaultdict(list) # source_id -> [localized_docs]
-        for loc in all_localized:
-            if loc.get('source_video_id'):
-                localized_map[loc['source_video_id']].append(loc)
-        
-        jobs_map = defaultdict(list) # source_id -> [job_docs]
-        for j in all_jobs:
-            if j.get('source_video_id'):
-                jobs_map[j['source_video_id']].append(j)
-        
-        final_videos = []
+
+        # Note: We already fetched localized_map and jobs_map above for uploaded videos
+        # They are already in scope and can be reused
         for video in videos_response.get('items', []):
             video_id = video['id']
             snippet = video['snippet']
@@ -292,8 +361,8 @@ async def list_videos(
             
             # Determine type and localizations
             localizations = []
-            
-            # 1. Check if it IS a localized video
+
+            # 1. Check if it IS a localized video (check all_localized list)
             is_localized = any(loc.get('localized_video_id') == video_id for loc in all_localized)
             type_str = "translated" if is_localized else "original"
             
@@ -364,6 +433,15 @@ async def list_videos(
         # Re-raise HTTP exceptions (like 401 from get_youtube_service)
         raise
     except Exception as e:
+        # Log the full error for debugging
+        import logging
+        import traceback
+        logger = logging.getLogger(__name__)
+        logger.error(
+            f"list_videos error - user_id: {user_id}, project_id: {project_id}, "
+            f"channel_id: {channel_id}, error: {str(e)}\n{traceback.format_exc()}"
+        )
+
         # For mock credentials or other errors, return empty list in development
         error_msg = str(e)
         if "invalid_grant" in error_msg.lower() or "mock" in error_msg.lower() or "No YouTube channel connected" in error_msg:
@@ -486,42 +564,35 @@ async def get_video_details(
 async def upload_video(
     title: str = Form(...),
     description: str = Form(""),
-    privacy_status: str = Form("private"),
+    channel_id: Optional[str] = Form(None),
     video_file: UploadFile = File(...),
+    thumbnail_file: Optional[UploadFile] = File(None),
     current_user: dict = Depends(get_current_user)
 ) -> VideoUploadResponse:
     """
-    Upload a video to YouTube channel.
-    
+    Upload a video to storage (S3 or local).
+    This creates a source video that can later be used for dubbing/translation jobs.
+
     Args:
         title: Video title
         description: Video description
-        privacy_status: Privacy setting (private/unlisted/public)
+        channel_id: Optional channel ID to associate video with
         video_file: Video file to upload
         current_user: Current authenticated user from Firebase Auth token
-        
+
     Returns:
         VideoUploadResponse: Upload result with video ID
-        
+
     Raises:
-        HTTPException: If upload fails or quota exceeded
+        HTTPException: If upload fails
     """
     user_id = current_user["user_id"]
-    
-    # Validate privacy status
-    valid_privacy_statuses = ['private', 'unlisted', 'public']
-    if privacy_status not in valid_privacy_statuses:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid privacy_status. Must be one of: {', '.join(valid_privacy_statuses)}"
-        )
-    
-    # Create temporary file for video
-    temp_file = None
+    temp_path = None
+
     try:
-        # Get YouTube service
-        youtube = await asyncio.to_thread(get_youtube_service, user_id)
-        
+        # Generate unique video ID
+        video_id = str(uuid.uuid4())
+
         # Save uploaded file to temporary location
         suffix = os.path.splitext(video_file.filename)[1] if video_file.filename else '.mp4'
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
@@ -532,82 +603,127 @@ async def upload_video(
                 if not chunk:
                     break
                 temp_file.write(chunk)
-        
-        # Create video metadata
-        body = {
-            'snippet': {
-                'title': title,
-                'description': description,
-                'tags': [],
-                'categoryId': '22'  # People & Blogs category
-            },
-            'status': {
-                'privacyStatus': privacy_status,
-                'selfDeclaredMadeForKids': False
-            }
+
+        # Upload to storage based on configuration
+        if settings.storage_type == "s3":
+            from services.s3_storage import get_s3_storage_service
+            s3_service = get_s3_storage_service()
+
+            # Upload to S3 with a job_id of "uploads" for manually uploaded videos
+            job_id = "uploads"
+            language_code = "original"
+            storage_key = await s3_service.upload_video(
+                temp_path,
+                user_id=user_id,
+                job_id=job_id,
+                language_code=language_code,
+                video_id=video_id
+            )
+
+            # Get storage URL
+            storage_url = await s3_service.get_storage_url(storage_key, settings.cloudfront_url)
+
+        else:
+            # Local storage
+            storage_dir = os.path.join(settings.local_storage_dir, 'videos', user_id, 'uploads', 'original')
+            os.makedirs(storage_dir, exist_ok=True)
+
+            storage_filename = f"{video_id}{suffix}"
+            storage_path = os.path.join(storage_dir, storage_filename)
+
+            # Copy temp file to storage
+            shutil.move(temp_path, storage_path)
+            temp_path = None  # Prevent deletion in finally block
+
+            # Build storage URL (served via /storage mount)
+            storage_url = f"/storage/videos/{user_id}/uploads/original/{storage_filename}"
+
+        # Handle thumbnail upload if provided
+        thumbnail_url = None
+        if thumbnail_file:
+            thumbnail_suffix = os.path.splitext(thumbnail_file.filename)[1] if thumbnail_file.filename else '.jpg'
+            thumbnail_filename = f"{video_id}_thumb{thumbnail_suffix}"
+
+            if settings.storage_type == "s3":
+                # Save thumbnail to temp file first
+                with tempfile.NamedTemporaryFile(delete=False, suffix=thumbnail_suffix) as thumb_temp:
+                    thumb_temp_path = thumb_temp.name
+                    while True:
+                        chunk = await thumbnail_file.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        thumb_temp.write(chunk)
+
+                # Upload to S3
+                from services.s3_storage import get_s3_storage_service
+                s3_service = get_s3_storage_service()
+                thumb_key = await s3_service.upload_file(
+                    thumb_temp_path,
+                    user_id=user_id,
+                    job_id="uploads",
+                    language_code="thumbnails",
+                    filename=thumbnail_filename
+                )
+                thumbnail_url = await s3_service.get_storage_url(thumb_key, settings.cloudfront_url)
+                os.unlink(thumb_temp_path)
+            else:
+                # Local storage
+                thumbnail_dir = os.path.join(settings.local_storage_dir, 'videos', user_id, 'uploads', 'thumbnails')
+                os.makedirs(thumbnail_dir, exist_ok=True)
+                thumbnail_path = os.path.join(thumbnail_dir, thumbnail_filename)
+
+                # Save thumbnail
+                with open(thumbnail_path, 'wb') as f:
+                    while True:
+                        chunk = await thumbnail_file.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+
+                thumbnail_url = f"/storage/videos/{user_id}/uploads/thumbnails/{thumbnail_filename}"
+
+        # Store video metadata in Firestore
+        video_data = {
+            'video_id': video_id,
+            'user_id': user_id,
+            'title': title,
+            'description': description,
+            'channel_id': channel_id,
+            'storage_url': storage_url,
+            'thumbnail_url': thumbnail_url,
+            'uploaded_at': datetime.utcnow(),
+            'status': 'uploaded',
+            'filename': video_file.filename
         }
-        
-        # Create media upload with resumable upload
-        media = MediaFileUpload(
-            temp_path,
-            chunksize=-1,  # Use default chunk size
-            resumable=True
-        )
-        
-        # Insert video
-        insert_request = youtube.videos().insert(
-            part=','.join(body.keys()),
-            body=body,
-            media_body=media
-        )
-        
-        # Execute upload (resumable upload handles chunking automatically)
-        response = await asyncio.to_thread(insert_request.execute)
-        
-        video_id = response['id']
-        
-        return VideoUploadResponse(
-            message="Video uploaded successfully",
-            video_id=video_id,
-            title=title,
-            privacy_status=privacy_status
-        )
-        
+
+        firestore_service.db.collection('uploaded_videos').document(video_id).set(video_data)
+
         # Log activity
         firestore_service.log_activity(
             user_id=user_id,
-            project_id=None,  # No project context here usually
+            project_id=None,
             action="Uploaded video",
-            details=f"Video '{title}' uploaded to YouTube with ID {video_id}."
+            details=f"Video '{title}' uploaded to storage with ID {video_id}."
         )
-        
-        return response
-        
-    except HttpError as e:
-        error_reason = e.error_details[0].get('reason', '') if e.error_details else ''
-        if e.resp.status == 403 and 'quotaExceeded' in error_reason:
-            raise HTTPException(
-                status_code=503,
-                detail="YouTube API quota exceeded. Please try again later."
-            )
-        elif e.resp.status in [401, 403]:
-            raise HTTPException(
-                status_code=401,
-                detail="Authentication failed. Please re-authenticate."
-            )
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail=f"YouTube API error: {str(e)}"
-            )
+
+        return VideoUploadResponse(
+            message="Video uploaded successfully to storage",
+            video_id=video_id,
+            title=title,
+            privacy_status="uploaded"  # Changed from YouTube privacy status
+        )
+
     except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Upload failed: {str(e)}\n{traceback.format_exc()}")
+
         raise HTTPException(
             status_code=500,
             detail=f"Failed to upload video: {str(e)}"
         )
     finally:
         # Clean up temporary file
-        if temp_file and os.path.exists(temp_path):
+        if temp_path and os.path.exists(temp_path):
             try:
                 os.unlink(temp_path)
             except Exception:
