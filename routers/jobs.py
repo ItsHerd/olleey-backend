@@ -6,6 +6,10 @@ import re
 import tempfile
 import os
 import asyncio
+import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 from services.firestore import firestore_service, firestore_admin
 from services.job_queue import enqueue_dubbing_job
@@ -986,3 +990,89 @@ async def get_job_videos(
         ))
 
     return response
+
+
+@router.patch("/{job_id}/videos/{language_code}")
+async def update_localized_video(
+    job_id: str,
+    language_code: str,
+    title: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    thumbnail_file: Optional[UploadFile] = File(None),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Update metadata for a localized video (title, description, thumbnail).
+    Used by the Review page to save changes before approval.
+    """
+    user_id = current_user["user_id"]
+
+    # Verify job ownership
+    job = firestore_service.get_processing_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found"
+        )
+
+    if job.get('user_id') != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to access this job"
+        )
+
+    # Find the localized video
+    videos = firestore_service.get_localized_videos_by_job_id(job_id)
+    target_video = next((v for v in videos if v.get('language_code') == language_code), None)
+
+    if not target_video:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No localized video found for language {language_code}"
+        )
+
+    # Prepare update data
+    update_data = {
+        'updated_at': firestore_admin.SERVER_TIMESTAMP
+    }
+
+    if title is not None:
+        update_data['title'] = title
+
+    if description is not None:
+        update_data['description'] = description
+
+    # Handle thumbnail upload
+    if thumbnail_file:
+        try:
+            # Create storage path for thumbnail
+            thumbnail_suffix = os.path.splitext(thumbnail_file.filename)[1] if thumbnail_file.filename else '.jpg'
+            thumbnail_filename = f"{uuid.uuid4()}_thumb{thumbnail_suffix}"
+            thumbnail_path = f"videos/{user_id}/localizations/{job_id}/{language_code}/thumbnails/{thumbnail_filename}"
+
+            # Save thumbnail to storage
+            os.makedirs(os.path.dirname(f"./storage/{thumbnail_path}"), exist_ok=True)
+
+            with open(f"./storage/{thumbnail_path}", "wb") as f:
+                content = await thumbnail_file.read()
+                f.write(content)
+
+            # Store relative path (frontend will prepend API_BASE_URL)
+            update_data['thumbnail_url'] = f"/storage/{thumbnail_path}"
+
+        except Exception as e:
+            logger.error(f"Failed to save thumbnail: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to save thumbnail: {str(e)}"
+            )
+
+    # Update the localized video in Firestore
+    video_ref = firestore_service.db.collection('localized_videos').document(target_video['id'])
+    video_ref.update(update_data)
+
+    return {
+        "success": True,
+        "message": "Localized video updated successfully",
+        "updated_fields": list(update_data.keys())
+    }

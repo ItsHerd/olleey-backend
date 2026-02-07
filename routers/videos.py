@@ -238,7 +238,11 @@ async def list_videos(
                     language_code=loc.get('language_code', ''),
                     status=loc.get('status', 'live'),
                     video_id=loc.get('localized_video_id'),
-                    job_id=loc.get('job_id')
+                    job_id=loc.get('job_id'),
+                    title=loc.get('title'),
+                    description=loc.get('description'),
+                    thumbnail_url=loc.get('thumbnail_url'),
+                    video_url=loc.get('storage_url')
                 ))
 
             # Add in-progress jobs

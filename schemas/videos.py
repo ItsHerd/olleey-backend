@@ -14,6 +14,8 @@ class LocalizationStatus(BaseModel):
     published_at: Optional[datetime] = None
     title: Optional[str] = None
     description: Optional[str] = None
+    thumbnail_url: Optional[str] = None  # Thumbnail URL for the localized video
+    video_url: Optional[str] = None  # Storage URL for the localized video
 
 
 class VideoItem(BaseModel):
