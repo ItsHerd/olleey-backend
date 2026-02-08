@@ -1,5 +1,5 @@
 """Job status and management router."""
-from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks, UploadFile, File, Form, Body
 from typing import Optional, List
 from datetime import datetime
 import re
@@ -877,8 +877,18 @@ async def cancel_job(
     """
     user_id = current_user["user_id"]
 
-    # Verify job ownership
+    # Try to get job by job_id first
     job = firestore_service.get_processing_job(job_id)
+
+    # If not found, search by source_video_id (handles cases like Garry Tan demo)
+    if not job:
+        jobs, _ = firestore_service.list_processing_jobs(user_id, limit=1000)
+        for j in jobs:
+            if j.get('source_video_id') == job_id:
+                job = j
+                job_id = j.get('id')
+                break
+
     if not job:
         raise HTTPException(
             status_code=404,
@@ -1075,4 +1085,165 @@ async def update_localized_video(
         "success": True,
         "message": "Localized video updated successfully",
         "updated_fields": list(update_data.keys())
+    }
+
+
+@router.post("/{job_id}/save-draft")
+async def save_draft(
+    job_id: str,
+    request: dict = Body(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Save localized video as draft.
+
+    This marks the video as ready but not yet published, allowing the user
+    to review and make changes before final publishing.
+
+    Accepts either a job_id or a video_id (source_video_id).
+    """
+    user_id = current_user["user_id"]
+    language_code = request.get('language_code')
+
+    if not language_code:
+        raise HTTPException(status_code=400, detail="language_code is required")
+
+    # Try to get job by job_id first
+    job = firestore_service.get_processing_job(job_id)
+
+    # If not found, assume it's a video_id and search for the job
+    if not job:
+        logger.info(f"Job not found by job_id '{job_id}', searching by source_video_id...")
+        jobs, _ = firestore_service.list_processing_jobs(user_id, limit=1000)
+
+        for j in jobs:
+            if j.get('source_video_id') == job_id:
+                job = j
+                job_id = j.get('id')  # Use the actual job_id
+                logger.info(f"Found job by source_video_id: {job_id}")
+                break
+
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job not found for job_id or video_id: {job_id}"
+        )
+
+    if job.get('user_id') != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Find the localized video for this language
+    localized_videos = firestore_service.get_localized_videos_by_job_id(job_id)
+    target_video = None
+
+    for vid in localized_videos:
+        if vid.get('language_code') == language_code:
+            target_video = vid
+            break
+
+    if not target_video:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Localized video not found for language {language_code}"
+        )
+
+    # Update status to draft (or keep as waiting_approval)
+    # The status indicates it's ready for review but not published
+    video_ref = firestore_service.db.collection('localized_videos').document(target_video['id'])
+    video_ref.update({
+        'status': 'draft',
+        'updated_at': firestore_admin.firestore.SERVER_TIMESTAMP
+    })
+
+    # Log activity
+    firestore_service.log_activity(
+        user_id=user_id,
+        project_id=job.get('project_id'),
+        action="Saved video as draft",
+        details=f"Video {target_video.get('title', 'Untitled')} saved as draft for language {language_code}."
+    )
+
+    logger.info(f"Video saved as draft: job_id={job_id}, language={language_code}")
+
+    return {
+        "message": "Video saved as draft successfully",
+        "job_id": job_id,
+        "language_code": language_code,
+        "status": "draft"
+    }
+
+
+@router.patch("/{job_id}/status")
+async def update_job_status(
+    job_id: str,
+    request: dict = Body(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Update job status (for demo purposes).
+
+    This endpoint allows updating the job status for demo simulations,
+    such as showing a job as processing and then ready for review.
+    """
+    user_id = current_user["user_id"]
+    new_status = request.get('status')
+
+    if not new_status:
+        raise HTTPException(status_code=400, detail="status is required")
+
+    # Try to get job by job_id first
+    job = firestore_service.get_processing_job(job_id)
+
+    # If not found, assume it's a video_id and search for the job
+    if not job:
+        logger.info(f"Job not found by job_id '{job_id}', searching by source_video_id...")
+        jobs, _ = firestore_service.list_processing_jobs(user_id, limit=1000)
+
+        for j in jobs:
+            if j.get('source_video_id') == job_id:
+                job = j
+                job_id = j.get('id')  # Use the actual job_id
+                logger.info(f"Found job by source_video_id: {job_id}")
+                break
+
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job not found for job_id or video_id: {job_id}"
+        )
+
+    if job.get('user_id') != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Update job status
+    job_ref = firestore_service.db.collection('processing_jobs').document(job_id)
+    job_ref.update({
+        'status': new_status,
+        'updated_at': firestore_admin.firestore.SERVER_TIMESTAMP
+    })
+
+    # If status is waiting_approval, also update localized videos
+    if new_status == 'waiting_approval':
+        localized_videos = firestore_service.get_localized_videos_by_job_id(job_id)
+        for vid in localized_videos:
+            video_ref = firestore_service.db.collection('localized_videos').document(vid['id'])
+            video_ref.update({
+                'status': 'waiting_approval',
+                'updated_at': firestore_admin.firestore.SERVER_TIMESTAMP
+            })
+
+    # Log activity
+    firestore_service.log_activity(
+        user_id=user_id,
+        project_id=job.get('project_id'),
+        action=f"Updated job status to {new_status}",
+        details=f"Job {job_id} status changed to {new_status} (demo flow)"
+    )
+
+    logger.info(f"Job status updated: job_id={job_id}, status={new_status}")
+
+    return {
+        "message": f"Job status updated to {new_status}",
+        "job_id": job_id,
+        "status": new_status
     }

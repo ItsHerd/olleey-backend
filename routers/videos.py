@@ -94,9 +94,50 @@ async def get_demo_videos_formatted(user_id: str, project_id: Optional[str], lim
         source_video_id = job.get('source_video_id')
         if not source_video_id:
             continue
-            
+
+        # Get source video document for storage_url
+        source_video_doc = firestore_service.db.collection('videos').document(source_video_id).get()
+        source_video = source_video_doc.to_dict() if source_video_doc.exists else {}
+
         # Get localized videos for this job
         localized_vids = firestore_service.get_localized_videos_by_job_id(job['id'])
+
+        # Demo: Ensure Garry Tan video has Spanish localized video entry
+        if source_video_id == "garry_tan_yc_demo":
+            has_spanish_loc = any(vid.get('language_code') == 'es' for vid in localized_vids)
+
+            if not has_spanish_loc:
+                print(f"[DEMO] Creating Spanish localized video entry for Garry Tan demo")
+                # Create the localized video entry
+                import uuid
+                localized_video_id = str(uuid.uuid4())
+
+                localized_video_data = {
+                    'id': localized_video_id,
+                    'job_id': job['id'],
+                    'source_video_id': source_video_id,
+                    'localized_video_id': None,
+                    'language_code': 'es',
+                    'channel_id': 'UCESChannel301',
+                    'status': 'waiting_approval',
+                    'storage_url': 'https://olleey-videos.s3.us-west-1.amazonaws.com/es.mov',
+                    'thumbnail_url': 'https://tii.imgix.net/production/articles/7643/03e02ef7-f12e-4faf-8551-37d5c5785586-UQ6LXV.jpg?auto=compress&fit=crop&auto=format',
+                    'title': 'Garry Tan - Presidente y CEO de Y Combinator',
+                    'description': (
+                        'Garry Tan es el Presidente y CEO de Y Combinator (YC), la aceleradora de startups más exitosa del mundo.\n\n'
+                        'En este video, Garry comparte perspectivas sobre la misión de YC de ayudar a las startups a tener éxito, '
+                        'la importancia de construir grandes productos, y consejos para fundadores navegando el viaje del emprendimiento.\n\n'
+                        'Este es un video de demostración que muestra las capacidades de localización de video impulsadas por IA de Olleey.'
+                    ),
+                    'duration': 180,
+                    'view_count': 0,
+                    'created_at': datetime.utcnow(),
+                    'updated_at': datetime.utcnow()
+                }
+
+                firestore_service.db.collection('localized_videos').document(localized_video_id).set(localized_video_data)
+                localized_vids.append(localized_video_data)
+                print(f"[DEMO] Spanish localized video entry created: {localized_video_id}")
         
         # Build localizations list
         localizations = []
@@ -122,7 +163,9 @@ async def get_demo_videos_formatted(user_id: str, project_id: Optional[str], lim
                 channel_id=loc_vid.get('channel_id'),
                 published_at=loc_vid.get('published_at') or loc_vid.get('updated_at'),
                 title=loc_vid.get('title'),
-                description=loc_vid.get('description')
+                description=loc_vid.get('description'),
+                thumbnail_url=loc_vid.get('thumbnail_url'),
+                video_url=loc_vid.get('storage_url')  # Include dubbed video storage URL
             ))
         
         # Get first localized video for thumbnail and title
@@ -161,16 +204,45 @@ async def get_demo_videos_formatted(user_id: str, project_id: Optional[str], lim
             view_count=sum(1000 * (i+1) for i in range(len(localizations))),  # Mock view counts
             video_type="original",
             source_video_id=None,
+            storage_url=source_video.get('storage_url'),  # Include storage URL from source video
             translated_languages=published_lang_codes,
             # Add duration for credit estimation
             duration=first_loc.get('duration', 210),  # Default 3.5 minutes
             global_views=sum(1000 * (i+1) for i in range(len(published_lang_codes)))
         )
         
+        # Demo: Ensure Garry Tan video always has Spanish localization
+        if source_video_id == "garry_tan_yc_demo":
+            # Check if Spanish localization exists
+            has_spanish = any(loc.language_code == 'es' for loc in localizations)
+
+            if not has_spanish:
+                print(f"[DEMO] Adding Spanish localization for Garry Tan demo video")
+                # Add Spanish localization with translated metadata
+                spanish_loc = LocalizationStatus(
+                    language_code='es',
+                    status='draft',  # Ready for review
+                    video_id=None,
+                    job_id=job.get('id'),
+                    channel_id='UCESChannel301',  # Spanish channel from seed
+                    published_at=None,
+                    title='Garry Tan - Presidente y CEO de Y Combinator',
+                    description=(
+                        'Garry Tan es el Presidente y CEO de Y Combinator (YC), la aceleradora de startups más exitosa del mundo.\n\n'
+                        'En este video, Garry comparte perspectivas sobre la misión de YC de ayudar a las startups a tener éxito, '
+                        'la importancia de construir grandes productos, y consejos para fundadores navegando el viaje del emprendimiento.\n\n'
+                        'Este es un video de demostración que muestra las capacidades de localización de video impulsadas por IA de Olleey.'
+                    ),
+                    thumbnail_url='https://tii.imgix.net/production/articles/7643/03e02ef7-f12e-4faf-8551-37d5c5785586-UQ6LXV.jpg?auto=compress&fit=crop&auto=format',
+                    video_url='https://olleey-videos.s3.us-west-1.amazonaws.com/es.mov'
+                )
+                video.localizations.append(spanish_loc)
+                print(f"[DEMO] Spanish localization added to Garry Tan video")
+
         # Debug: Print localization statuses
-        loc_statuses = {loc.language_code: loc.status for loc in localizations}
+        loc_statuses = {loc.language_code: loc.status for loc in video.localizations}
         print(f"[DEMO] Video {source_video_id} localization statuses: {loc_statuses}")
-        
+
         videos.append(video)
     
     return VideoListResponse(
@@ -271,6 +343,7 @@ async def list_videos(
                 channel_name=uploaded_video.get('channel_name', 'Uploaded'),
                 video_type="original",
                 source_video_id=None,
+                storage_url=uploaded_video.get('storage_url'),  # Include storage URL
                 localizations=localizations,
                 translated_languages=[l.language_code for l in localizations if l.status == 'live']
             )

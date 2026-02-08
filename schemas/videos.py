@@ -29,6 +29,7 @@ class VideoItem(BaseModel):
     channel_name: str  # YouTube channel name
     video_type: str = "all"  # "all", "original", or "translated"
     source_video_id: Optional[str] = None  # If translated, link to original video
+    storage_url: Optional[str] = None  # S3 or storage URL for the video file
     localizations: List[LocalizationStatus] = []
     translated_languages: list[str] = []  # For backward compatibility
 
