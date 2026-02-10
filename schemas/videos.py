@@ -22,7 +22,7 @@ class VideoItem(BaseModel):
     """Single video item model."""
     video_id: str
     title: str
-    thumbnail_url: str
+    thumbnail_url: Optional[str] = None
     published_at: datetime
     view_count: int = 0
     channel_id: str  # YouTube channel ID where video is published

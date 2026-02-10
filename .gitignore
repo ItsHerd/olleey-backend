@@ -3,10 +3,12 @@
 .env.local
 .env.*.local
 
-# Firebase service account keys
+# Firebase service account keys & credentials
 *-firebase-adminsdk-*.json
 serviceAccountKey.json
 firebase-adminsdk-*.json
+credentials/
+*.json
 
 # Python
 __pycache__/

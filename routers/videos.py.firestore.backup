@@ -15,7 +15,7 @@ import logging
 import traceback
 from datetime import datetime, timedelta
 
-from services.supabase_db import supabase_service
+from services.firestore import firestore_service
 from schemas.videos import (
     VideoListResponse, VideoItem, VideoUploadRequest, VideoUploadResponse,
     SubscriptionRequest, SubscriptionResponse, UnsubscribeRequest, LocalizationStatus
@@ -86,7 +86,7 @@ async def get_demo_videos_formatted(user_id: str, project_id: Optional[str], lim
     from typing import Dict
     
     # Get all jobs for the user
-    jobs, total = supabase_service.list_processing_jobs(user_id, project_id=project_id, limit=limit)
+    jobs, total = firestore_service.list_processing_jobs(user_id, project_id=project_id, limit=limit)
     print(f"[DEMO] Found {len(jobs)} jobs for user {user_id}")
     
     videos = []
@@ -96,10 +96,11 @@ async def get_demo_videos_formatted(user_id: str, project_id: Optional[str], lim
             continue
 
         # Get source video document for storage_url
-        source_video = supabase_service.get_video(source_video_id) or {}
+        source_video_doc = firestore_service.db.collection('videos').document(source_video_id).get()
+        source_video = source_video_doc.to_dict() if source_video_doc.exists else {}
 
         # Get localized videos for this job
-        localized_vids = supabase_service.get_localized_videos_by_job_id(job['id'])
+        localized_vids = firestore_service.get_localized_videos_by_job_id(job['id'])
 
         # Demo: Ensure Garry Tan video has Spanish localized video entry
         if source_video_id == "garry_tan_yc_demo":
@@ -134,8 +135,8 @@ async def get_demo_videos_formatted(user_id: str, project_id: Optional[str], lim
                     'updated_at': datetime.utcnow()
                 }
 
-                created_video = supabase_service.create_localized_video(localized_video_data)
-                localized_vids.append(created_video if created_video else localized_video_data)
+                firestore_service.db.collection('localized_videos').document(localized_video_id).set(localized_video_data)
+                localized_vids.append(localized_video_data)
                 print(f"[DEMO] Spanish localized video entry created: {localized_video_id}")
         
         # Build localizations list
@@ -184,7 +185,7 @@ async def get_demo_videos_formatted(user_id: str, project_id: Optional[str], lim
         channel_name = "Demo Channel"
         if channel_id and not str(channel_id).startswith("UC"):
             # Likely a connection_id; resolve to YouTube channel id
-            conn = supabase_service.get_youtube_connection(channel_id, user_id)
+            conn = firestore_service.get_youtube_connection(channel_id, user_id)
             if conn:
                 channel_id = conn.get('youtube_channel_id', channel_id)
                 channel_name = conn.get('youtube_channel_name', channel_name)
@@ -278,22 +279,12 @@ async def list_videos(
         return await get_demo_videos_formatted(user_id, project_id, limit)
 
     try:
-        # Get ALL videos from Supabase (not just uploaded ones)
-        db_videos, total_count = supabase_service.list_videos(
-            user_id=user_id,
-            project_id=project_id,
-            channel_id=channel_id,
-            limit=limit
-        )
+        # FIRST: Get uploaded videos from Firestore (videos uploaded via /videos/upload)
+        uploaded_videos = firestore_service.get_uploaded_videos(user_id, project_id, limit)
 
-        print(f"[VIDEOS] Loaded {len(db_videos)} videos from database")
-        print(f"[VIDEOS] Video IDs: {[v.get('video_id') for v in db_videos]}")
-
-        # Get localizations and jobs for enrichment
-        all_localized = supabase_service.get_all_localized_videos_for_user(user_id)
-        all_jobs, _ = supabase_service.list_processing_jobs(user_id, limit=100, project_id=project_id)
-
-        print(f"[VIDEOS] Found {len(all_localized)} localizations and {len(all_jobs)} jobs")
+        # Get localizations for uploaded videos
+        all_localized = firestore_service.get_all_localized_videos_for_user(user_id)
+        all_jobs, _ = firestore_service.list_processing_jobs(user_id, limit=100, project_id=project_id)
 
         # Maps for quick lookup
         localized_map = defaultdict(list)  # source_id -> [localized_docs]
@@ -306,23 +297,15 @@ async def list_videos(
             if j.get('source_video_id'):
                 jobs_map[j['source_video_id']].append(j)
 
-        print(f"[VIDEOS] Localized map keys: {list(localized_map.keys())}")
-        print(f"[VIDEOS] Jobs map keys: {list(jobs_map.keys())}")
-
         final_videos = []
 
-        # Process ALL videos from database
-        for db_video in db_videos:
-            video_id = db_video.get('video_id')
-
-            print(f"[VIDEOS] Processing video: {video_id}, title: {db_video.get('title')}")
+        # Add uploaded videos to results
+        for uploaded_video in uploaded_videos:
+            video_id = uploaded_video.get('video_id')
 
             # Get localizations for this video
             localizations = []
-            localized_docs = localized_map.get(video_id, [])
-            print(f"[VIDEOS]   Found {len(localized_docs)} localized versions")
-
-            for loc in localized_docs:
+            for loc in localized_map.get(video_id, []):
                 localizations.append(LocalizationStatus(
                     language_code=loc.get('language_code', ''),
                     status=loc.get('status', 'live'),
@@ -335,38 +318,32 @@ async def list_videos(
                 ))
 
             # Add in-progress jobs
-            job_docs = jobs_map.get(video_id, [])
-            print(f"[VIDEOS]   Found {len(job_docs)} processing jobs")
-
-            for j in job_docs:
+            for j in jobs_map.get(video_id, []):
                 live_langs = [l.language_code for l in localizations]
                 for lang in j.get('target_languages', []):
                     if lang not in live_langs:
-                        print(f"[VIDEOS]     Adding processing job for {lang}")
                         localizations.append(LocalizationStatus(
                             language_code=lang,
                             status='processing',
                             job_id=j.get('id')
                         ))
 
-            print(f"[VIDEOS]   Total localizations: {len(localizations)}")
-
             # Filter by type if requested
             if video_type != "all" and video_type != "original":
                 continue
 
-            # Create video item from database video
+            # Create video item from uploaded video
             video_item = VideoItem(
                 video_id=video_id,
-                title=db_video.get('title', 'Untitled'),
-                thumbnail_url=db_video.get('thumbnail_url', ''),
-                published_at=db_video.get('uploaded_at', datetime.utcnow()),
+                title=uploaded_video.get('title', 'Untitled'),
+                thumbnail_url=uploaded_video.get('thumbnail_url', ''),
+                published_at=uploaded_video.get('uploaded_at', datetime.utcnow()),
                 view_count=0,  # No views for uploaded videos
-                channel_id=db_video.get('channel_id', ''),
-                channel_name=db_video.get('channel_name', 'Uploaded'),
+                channel_id=uploaded_video.get('channel_id', ''),
+                channel_name=uploaded_video.get('channel_name', 'Uploaded'),
                 video_type="original",
                 source_video_id=None,
-                storage_url=db_video.get('storage_url'),  # Include storage URL
+                storage_url=uploaded_video.get('storage_url'),  # Include storage URL
                 localizations=localizations,
                 translated_languages=[l.language_code for l in localizations if l.status == 'live']
             )
@@ -615,7 +592,7 @@ async def get_video_details(
         
         # Determine video type from Firestore
         # Check if this video is a result of a localization (i.e., it is a translated video)
-        localized = supabase_service.get_localized_video_by_localized_id(video_id, user_id)
+        localized = firestore_service.get_localized_video_by_localized_id(video_id, user_id)
         
         if localized:
              return VideoItem(
@@ -631,7 +608,7 @@ async def get_video_details(
             )
             
         # Check if this is an original video that has translations
-        localized_list = supabase_service.get_localized_videos_by_source_id(video_id, user_id)
+        localized_list = firestore_service.get_localized_videos_by_source_id(video_id, user_id)
         translated_languages = [
             loc.get('language_code') 
             for loc in localized_list 
@@ -796,11 +773,10 @@ async def upload_video(
             'filename': video_file.filename
         }
 
-        # Store in videos table (uploaded_videos collection doesn't exist in Supabase)
-        supabase_service.create_video(video_data)
+        firestore_service.db.collection('uploaded_videos').document(video_id).set(video_data)
 
         # Log activity
-        supabase_service.log_activity(
+        firestore_service.log_activity(
             user_id=user_id,
             project_id=None,
             action="Uploaded video",
@@ -898,7 +874,7 @@ async def subscribe_to_channel(
         expires_at = datetime.utcnow() + timedelta(seconds=request.lease_seconds)
         
         # Store subscription in Firestore
-        subscription_id = supabase_service.create_subscription(
+        subscription_id = firestore_service.create_subscription(
             user_id=user_id,
             channel_id=request.channel_id,
             callback_url=callback_url,
@@ -915,7 +891,7 @@ async def subscribe_to_channel(
         )
         
         # Log activity
-        supabase_service.log_activity(
+        firestore_service.log_activity(
             user_id=user_id,
             project_id=None,
             action="Created subscription",
@@ -961,7 +937,7 @@ async def unsubscribe_from_channel(
     try:
         # Find subscription
         if request.subscription_id:
-            subscription = supabase_service.get_subscription(request.subscription_id)
+            subscription = firestore_service.get_subscription(request.subscription_id)
             if not subscription:
                 raise HTTPException(
                     status_code=404,
@@ -974,7 +950,7 @@ async def unsubscribe_from_channel(
                     detail="Access denied: subscription belongs to another user"
                 )
         elif request.channel_id:
-            subscription = supabase_service.get_subscription_by_channel(user_id, request.channel_id)
+            subscription = firestore_service.get_subscription_by_channel(user_id, request.channel_id)
         else:
             raise HTTPException(
                 status_code=400,
@@ -1003,7 +979,7 @@ async def unsubscribe_from_channel(
             response.raise_for_status()
         
         # Remove subscription from Firestore
-        supabase_service.delete_subscription(subscription['id'])
+        firestore_service.delete_subscription(subscription['id'])
         
         return {"message": "Unsubscribed successfully"}
         

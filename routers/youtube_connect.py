@@ -65,11 +65,16 @@ async def get_channel_graph(
 ) -> ChannelGraphResponse:
     """
     Get channel relationship graph.
+    HYBRID: YouTube connections from Firestore, channels and jobs from Supabase
     """
+    from services.supabase_db import supabase_service
+
     user_id = current_user["user_id"]
+    # YouTube OAuth connections still in Firestore (not migrated)
     youtube_connections = firestore_service.get_youtube_connections(user_id)
-    language_channels = firestore_service.get_language_channels(user_id, project_id=project_id)
-    all_jobs, _ = firestore_service.list_processing_jobs(user_id, limit=1000, project_id=project_id)
+    # Channels and jobs now in Supabase
+    language_channels = supabase_service.get_language_channels(user_id, project_id=project_id)
+    all_jobs, _ = supabase_service.list_processing_jobs(user_id, limit=1000, project_id=project_id)
     
     master_nodes = []
     active_count = 0

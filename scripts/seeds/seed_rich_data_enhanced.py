@@ -320,7 +320,7 @@ def create_localized_video(
 
     # Realistic storage URLs
     storage_url = None
-    if status in ['published', 'waiting_approval', 'draft']:
+    if status in ['live', 'waiting_approval', 'draft']:
         storage_url = f"https://storage.googleapis.com/olleey-demo/localized/{source_video['id']}_{lang}.mp4"
 
     # Localized metadata
@@ -329,7 +329,7 @@ def create_localized_video(
 
     # Published video ID for live videos
     localized_video_id = None
-    if status == 'published':
+    if status == 'live':
         localized_video_id = f"LOC_{lang.upper()}_{uuid.uuid4().hex[:8]}"
 
     video_data = {
@@ -344,7 +344,7 @@ def create_localized_video(
         'title': title,
         'description': description,
         'duration': source_video['duration'],
-        'view_count': random.randint(1000, 50000) if status == 'published' else 0,
+        'view_count': random.randint(1000, 50000) if status == 'live' else 0,
         'created_at': firestore.SERVER_TIMESTAMP,
         'updated_at': firestore.SERVER_TIMESTAMP
     }
@@ -352,7 +352,7 @@ def create_localized_video(
     firestore_service.db.collection('localized_videos').document(video_id).set(video_data)
 
     # Log activity for successful localizations
-    if status in ['published', 'waiting_approval']:
+    if status in ['live', 'waiting_approval']:
         log_activity(
             "Processed video (Simulated)" if status == 'waiting_approval' else "Published localized video",
             f"Video localized for language {lang}. {'Awaiting approval.' if status == 'waiting_approval' else 'Now live!'}",
@@ -397,11 +397,11 @@ def seed_comprehensive_data():
     print("✅ Scenario 1: Completed jobs with published videos")
     j1 = create_job(p_main, 'completed', SOURCE_VIDEOS[0], ['es', 'de', 'fr'], progress=100, days_ago=7)
     for lang in ['es', 'de', 'fr']:
-        create_localized_video(j1, SOURCE_VIDEOS[0], lang, 'published', language_channels.get(lang))
+        create_localized_video(j1, SOURCE_VIDEOS[0], lang, 'live', language_channels.get(lang))
 
     j2 = create_job(p_music, 'completed', SOURCE_VIDEOS[4], ['es', 'pt', 'ja'], progress=100, days_ago=5)
     for lang in ['es', 'pt', 'ja']:
-        create_localized_video(j2, SOURCE_VIDEOS[4], lang, 'published', language_channels.get(lang))
+        create_localized_video(j2, SOURCE_VIDEOS[4], lang, 'live', language_channels.get(lang))
     print()
 
     # Scenario 2: Jobs waiting for approval (ready state)
@@ -421,14 +421,14 @@ def seed_comprehensive_data():
     create_localized_video(j5, SOURCE_VIDEOS[2], 'de', 'processing', language_channels.get('de'))
     create_localized_video(j5, SOURCE_VIDEOS[2], 'ja', 'processing', language_channels.get('ja'))
 
-    j6 = create_job(p_main, 'voice_cloning', SOURCE_VIDEOS[5], ['es'], progress=40, days_ago=0)
+    j6 = create_job(p_main, 'processing', SOURCE_VIDEOS[5], ['es'], progress=40, days_ago=0)
     create_localized_video(j6, SOURCE_VIDEOS[5], 'es', 'processing', language_channels.get('es'))
     print()
 
     # Scenario 4: Jobs in various early stages
     print("🚀 Scenario 4: Jobs in early stages")
-    j7 = create_job(p_shorts, 'downloading', SOURCE_VIDEOS[6], ['fr', 'pt'], progress=15, days_ago=0)
-    j8 = create_job(p_archive, 'transcribing', SOURCE_VIDEOS[7], ['de'], progress=25, days_ago=0)
+    j7 = create_job(p_shorts, 'processing', SOURCE_VIDEOS[6], ['fr', 'pt'], progress=15, days_ago=0)
+    j8 = create_job(p_archive, 'processing', SOURCE_VIDEOS[7], ['de'], progress=25, days_ago=0)
     print()
 
     # Scenario 5: Failed jobs with error messages

@@ -4,7 +4,7 @@ from typing import List, Optional
 from datetime import datetime
 import asyncio
 
-from services.supabase_db import supabase_service
+from services.firestore import firestore_service
 from schemas.channels import (
     LanguageChannelRequest, LanguageChannelResponse, ChannelListResponse,
     ChannelGraphResponse, YouTubeConnectionNode, LanguageChannelNode, ChannelNodeStatus,
@@ -80,13 +80,13 @@ async def get_channel_graph(
     user_id = current_user["user_id"]
     
     # Get all YouTube connections (master nodes)
-    youtube_connections = supabase_service.get_youtube_connections(user_id)
+    youtube_connections = firestore_service.get_youtube_connections(user_id)
     
     # Get all language channels (satellite nodes), filtered by project
-    language_channels = supabase_service.get_language_channels(user_id, project_id=project_id)
+    language_channels = firestore_service.get_language_channels(user_id, project_id=project_id)
     
     # Get job statistics for each connection, filtered by project
-    all_jobs, _ = supabase_service.list_processing_jobs(user_id, limit=1000, project_id=project_id)
+    all_jobs, _ = firestore_service.list_processing_jobs(user_id, limit=1000, project_id=project_id)
     
     master_nodes = []
     active_count = 0
@@ -212,7 +212,7 @@ async def list_channels(
         ChannelListResponse: List of language channels
     """
     user_id = current_user["user_id"]
-    channels = supabase_service.get_language_channels(user_id, project_id=project_id)
+    channels = firestore_service.get_language_channels(user_id, project_id=project_id)
     
     channel_responses = []
     for ch in channels:
@@ -289,7 +289,7 @@ async def create_channel(
         master_connection_id = request.master_connection_id
         if master_connection_id:
             # Verify master connection exists and belongs to user
-            master_conn = supabase_service.get_youtube_connection(master_connection_id, user_id)
+            master_conn = firestore_service.get_youtube_connection(master_connection_id, user_id)
             if not master_conn:
                 raise HTTPException(
                     status_code=404,
@@ -303,18 +303,18 @@ async def create_channel(
                 )
             # Check if the channel_id matches a YouTube connection with this master_connection_id
             # This handles the case where user connected via OAuth with master_connection_id
-            youtube_conn = supabase_service.get_youtube_connection_by_channel(user_id, request.channel_id)
+            youtube_conn = firestore_service.get_youtube_connection_by_channel(user_id, request.channel_id)
             if youtube_conn and youtube_conn.get('master_connection_id') == master_connection_id:
                 # This connection was created for this master, use it
                 pass
         else:
             # If no master_connection_id provided, check if channel_id matches a YouTube connection
             # that has a master_connection_id set (from OAuth flow)
-            youtube_conn = supabase_service.get_youtube_connection_by_channel(user_id, request.channel_id)
+            youtube_conn = firestore_service.get_youtube_connection_by_channel(user_id, request.channel_id)
             if youtube_conn and youtube_conn.get('master_connection_id'):
                 # Verify the master connection is not itself a satellite
                 master_conn_id = youtube_conn.get('master_connection_id')
-                master_conn = supabase_service.get_youtube_connection(master_conn_id, user_id)
+                master_conn = firestore_service.get_youtube_connection(master_conn_id, user_id)
                 if master_conn and master_conn.get('master_connection_id'):
                     raise HTTPException(
                         status_code=400,
@@ -324,20 +324,20 @@ async def create_channel(
                 master_connection_id = master_conn_id
         
         # Check if user has any existing projects
-        existing_projects = supabase_service.list_projects(user_id)
+        existing_projects = firestore_service.list_projects(user_id)
         target_project_id = request.project_id
         
         if not existing_projects:
             # No projects exist -> Create Default Project
             print(f"[DEBUG] No projects found for user {user_id}. Creating 'Default Project'.")
-            target_project_id = supabase_service.create_project(
+            target_project_id = firestore_service.create_project(
                 user_id=user_id,
                 name="Default Project",
                 master_connection_id=master_connection_id
             )
             
             # Log the auto-creation
-            supabase_service.log_activity(
+            firestore_service.log_activity(
                 user_id=user_id,
                 project_id=target_project_id,
                 action="Created project",
@@ -345,7 +345,7 @@ async def create_channel(
             )
 
         # Check if channel already exists for this channel_id
-        existing_channels = supabase_service.get_language_channels(user_id)
+        existing_channels = firestore_service.get_language_channels(user_id)
         existing = None
         for ch in existing_channels:
             if ch.get('channel_id') == request.channel_id:
@@ -361,7 +361,7 @@ async def create_channel(
                 print(f"[DEBUG] Found orphaned language channel, reassigning to master: {master_connection_id}")
                 
                 # Update the existing language channel
-                supabase_service.update_language_channel(
+                firestore_service.update_language_channel(
                     request.channel_id,
                     user_id,
                     language_code=request.language_code,
@@ -372,7 +372,7 @@ async def create_channel(
                 )
                 
                 # Get updated channel to return
-                channels = supabase_service.get_language_channels(user_id)
+                channels = firestore_service.get_language_channels(user_id)
                 updated_channel = None
                 for ch in channels:
                     if ch.get('id') == existing.get('id'):
@@ -414,7 +414,7 @@ async def create_channel(
                 )
         
         # Create new language channel record in Firestore
-        channel_id = supabase_service.create_language_channel(
+        channel_id = firestore_service.create_language_channel(
             user_id=user_id,
             channel_id=request.channel_id,
             language_code=request.language_code,
@@ -425,7 +425,7 @@ async def create_channel(
         )
         
         # Get created channel to return
-        channels = supabase_service.get_language_channels(user_id)
+        channels = firestore_service.get_language_channels(user_id)
         channel = None
         for ch in channels:
             if ch.get('id') == channel_id:
@@ -508,7 +508,7 @@ async def update_channel(
         # If only language_code provided, update both fields
         updates['language_code'] = request.language_code
         # Get existing language_codes and add/update
-        existing_channels = supabase_service.get_language_channels(user_id)
+        existing_channels = firestore_service.get_language_channels(user_id)
         existing = None
         for ch in existing_channels:
             if ch.get('id') == channel_id:
@@ -532,7 +532,7 @@ async def update_channel(
         )
     
     # Update channel
-    success = supabase_service.update_language_channel(channel_id, user_id, **updates)
+    success = firestore_service.update_language_channel(channel_id, user_id, **updates)
     
     if not success:
         raise HTTPException(
@@ -541,7 +541,7 @@ async def update_channel(
         )
     
     # Get updated channel to return
-    channels = supabase_service.get_language_channels(user_id)
+    channels = firestore_service.get_language_channels(user_id)
     channel = next((ch for ch in channels if ch.get('channel_id') == channel_id), None)
     
     if not channel:
@@ -591,7 +591,7 @@ async def pause_channel(
     """
     user_id = current_user["user_id"]
     
-    success = supabase_service.update_language_channel(channel_id, user_id, is_paused=True)
+    success = firestore_service.update_language_channel(channel_id, user_id, is_paused=True)
     
     if not success:
         raise HTTPException(
@@ -619,7 +619,7 @@ async def unpause_channel(
     """
     user_id = current_user["user_id"]
     
-    success = supabase_service.update_language_channel(channel_id, user_id, is_paused=False)
+    success = firestore_service.update_language_channel(channel_id, user_id, is_paused=False)
     
     if not success:
         raise HTTPException(
@@ -648,7 +648,7 @@ async def delete_channel(
     user_id = current_user["user_id"]
     
     # Check if channel exists
-    channels = supabase_service.get_language_channels(user_id)
+    channels = firestore_service.get_language_channels(user_id)
     channel_exists = any(ch.get('channel_id') == channel_id for ch in channels)
     
     if not channel_exists:
@@ -657,6 +657,6 @@ async def delete_channel(
             detail="Channel not found"
         )
     
-    supabase_service.delete_language_channel(channel_id, user_id)
+    firestore_service.delete_language_channel(channel_id, user_id)
     
     return {"message": "Channel removed successfully"}

@@ -6,133 +6,11 @@ import json
 
 from schemas.dashboard import DashboardResponse, YouTubeConnectionSummary, ProcessingJobSummary, ProjectSummary, CreditSummary, WeeklyStats, ActivityFeedItem
 from middleware.auth import get_current_user
-from services.supabase_db import supabase_service
+from services.firestore import firestore_service
 from firebase_admin import auth
 from datetime import timedelta
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
-
-
-@router.get("/stats")
-async def get_dashboard_stats(
-    current_user: dict = Depends(get_current_user),
-    project_id: Optional[str] = None
-):
-    """
-    Get dashboard statistics (jobs, videos, channels counts).
-    """
-    user_id = current_user["user_id"]
-
-    # Get job counts
-    jobs_data, total_jobs = supabase_service.list_processing_jobs(user_id, project_id=project_id, limit=100)
-    active_jobs = sum(1 for job in jobs_data if job.get('status') in ['pending', 'downloading', 'processing', 'uploading', 'waiting_approval'])
-    completed_jobs = sum(1 for job in jobs_data if job.get('status') == 'completed')
-
-    # Get channel counts
-    language_channels = supabase_service.get_language_channels(user_id, project_id=project_id)
-
-    # Calculate weekly stats
-    from datetime import timedelta
-    now = datetime.utcnow()
-    one_week_ago = now - timedelta(days=7)
-    videos_completed_this_week = 0
-
-    for job in jobs_data:
-        if job.get('status') == 'completed':
-            comp_at = job.get('completed_at', job.get('updated_at'))
-            if comp_at:
-                if hasattr(comp_at, 'timestamp'):
-                    comp_at_dt = datetime.fromtimestamp(comp_at.timestamp())
-                else:
-                    comp_at_dt = comp_at
-
-                if isinstance(comp_at_dt, datetime) and comp_at_dt > one_week_ago:
-                    videos_completed_this_week += 1
-
-    return {
-        "total_jobs": total_jobs,
-        "active_jobs": active_jobs,
-        "completed_jobs": completed_jobs,
-        "total_language_channels": len(language_channels),
-        "weekly_stats": {
-            "videos_completed": videos_completed_this_week,
-            "languages_added": len(language_channels),
-            "growth_percentage": 15.5 if completed_jobs > 0 else 0.0
-        },
-        "credits": {
-            "used": completed_jobs * 10,
-            "limit": 1000,
-            "reset_date": (now + timedelta(days=30)).isoformat()
-        }
-    }
-
-
-@router.get("/jobs")
-async def get_dashboard_jobs(
-    current_user: dict = Depends(get_current_user),
-    project_id: Optional[str] = None,
-    limit: int = 20
-):
-    """
-    Get recent processing jobs for dashboard.
-    """
-    user_id = current_user["user_id"]
-    jobs_data, total = supabase_service.list_processing_jobs(user_id, project_id=project_id, limit=limit)
-
-    return {
-        "jobs": jobs_data,
-        "total": total
-    }
-
-
-@router.get("/channels")
-async def get_dashboard_channels(
-    current_user: dict = Depends(get_current_user),
-    project_id: Optional[str] = None
-):
-    """
-    Get language channels for dashboard.
-    """
-    user_id = current_user["user_id"]
-    channels = supabase_service.get_language_channels(user_id, project_id=project_id)
-
-    return {
-        "channels": channels,
-        "total": len(channels)
-    }
-
-
-@router.get("/projects")
-async def get_dashboard_projects(
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    Get projects for dashboard.
-    """
-    user_id = current_user["user_id"]
-    projects = supabase_service.list_projects(user_id)
-
-    return {
-        "projects": projects,
-        "total": len(projects)
-    }
-
-
-@router.get("/connections")
-async def get_dashboard_connections(
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    Get YouTube connections for dashboard.
-    """
-    user_id = current_user["user_id"]
-    connections = supabase_service.get_youtube_connections(user_id)
-
-    return {
-        "connections": connections,
-        "total": len(connections),
-        "has_connection": len(connections) > 0
-    }
 
 
 @router.get("/activity")
@@ -146,7 +24,7 @@ async def get_activity_feed(
     Returns data in frontend-compatible format with message, time, icon, color.
     """
     user_id = current_user["user_id"]
-    logs = supabase_service.list_activity_logs(user_id=user_id, project_id=project_id, limit=limit)
+    logs = firestore_service.list_activity_logs(user_id=user_id, project_id=project_id, limit=limit)
     
     # Map status to icon
     def get_icon_for_action(action: str, status: str) -> str:
@@ -229,15 +107,12 @@ async def get_activity_feed(
     }
 )
 async def get_dashboard(
-    current_user: dict = Depends(get_current_user),
-    project_id: Optional[str] = None
+    current_user: dict = Depends(get_current_user)
 ):
     """
-    Get dashboard data for the current user, optionally filtered by project.
+    Get dashboard data for the current user.
     """
     user_id = current_user["user_id"]
-
-    print(f"[DASHBOARD] Getting dashboard for user_id={user_id}, project_id={project_id}")
     
     # Defaults
     now = datetime.utcnow()
@@ -250,7 +125,7 @@ async def get_dashboard(
         # 1. YouTube Connections
         youtube_connections: List[YouTubeConnectionSummary] = []
         try:
-            youtube_connections_data = supabase_service.get_youtube_connections(user_id)
+            youtube_connections_data = firestore_service.get_youtube_connections(user_id)
             for conn in youtube_connections_data:
                 youtube_connections.append(
                     YouTubeConnectionSummary(
@@ -265,7 +140,7 @@ async def get_dashboard(
             print("[DASHBOARD_WARN] failed to load youtube_connections:", str(e))
         
         # 2. Processing Jobs & Weekly Stats
-        jobs_data, total_jobs = supabase_service.list_processing_jobs(user_id, project_id=project_id, limit=100)
+        jobs_data, total_jobs = firestore_service.list_processing_jobs(user_id, limit=100)
         
         active_jobs = sum(1 for job in jobs_data if job.get('status') in ['pending', 'downloading', 'processing', 'uploading', 'waiting_approval'])
         completed_jobs = sum(1 for job in jobs_data if job.get('status') == 'completed')
@@ -290,7 +165,7 @@ async def get_dashboard(
         for job in jobs_data[:job_limit]:
             recent_jobs.append(
                 ProcessingJobSummary(
-                    job_id=job.get('job_id', ''),  # Fixed: use 'job_id' not 'id'
+                    job_id=job.get('id', ''),
                     source_video_id=job.get('source_video_id', ''),
                     status=job.get('status', 'pending'),
                     progress=job.get('progress', 0),
@@ -302,7 +177,7 @@ async def get_dashboard(
         # 3. Language Channels
         language_channels = []
         try:
-            language_channels_data = supabase_service.get_language_channels(user_id, project_id=project_id)
+            language_channels_data = firestore_service.get_language_channels(user_id)
             for channel in language_channels_data:
                 language_channels.append({
                     'id': channel.get('id', ''),
@@ -317,7 +192,7 @@ async def get_dashboard(
         # 4. Projects
         projects: List[ProjectSummary] = []
         try:
-            projects_data = supabase_service.list_projects(user_id)
+            projects_data = firestore_service.list_projects(user_id)
             for proj in projects_data:
                 projects.append(ProjectSummary(
                     id=proj.get('id', ''),
@@ -330,7 +205,7 @@ async def get_dashboard(
         # 5. Recent Activity
         recent_activity = []
         try:
-            activity_data = supabase_service.list_activity_logs(user_id, project_id=project_id, limit=5)
+            activity_data = firestore_service.list_activity_logs(user_id, limit=5)
             for log in activity_data:
                 ts = log.get('timestamp')
                 if hasattr(ts, 'timestamp'):
@@ -368,9 +243,7 @@ async def get_dashboard(
                 if provider.provider_id == "google.com":
                     auth_provider = "google"
                     break
-
-        print(f"[DASHBOARD] Returning data: projects={len(projects)}, videos={total_jobs}, jobs={total_jobs}, channels={len(language_channels)}")
-
+        
         return DashboardResponse(
             user_id=user_id,
             email=current_user.get("email") or firebase_user.email,

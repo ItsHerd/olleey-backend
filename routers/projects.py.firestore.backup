@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Depends, Body, Query
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-from services.supabase_db import supabase_service
+from services.firestore import firestore_service
 from middleware.auth import get_current_user
 from schemas.projects import CreateProjectRequest, ProjectResponse, ActivityLogResponse
 
@@ -15,7 +15,7 @@ async def list_projects(
 ):
     """List all projects for the current user."""
     user_id = current_user["user_id"]
-    projects = supabase_service.list_projects(user_id)
+    projects = firestore_service.list_projects(user_id)
     return projects
 
 @router.post("", response_model=ProjectResponse)
@@ -28,25 +28,25 @@ async def create_project(
     
     # If master_connection_id provided, verify ownership
     if request.master_connection_id:
-        conn = supabase_service.get_youtube_connection(request.master_connection_id, user_id)
+        conn = firestore_service.get_youtube_connection(request.master_connection_id, user_id)
         if not conn:
             raise HTTPException(status_code=400, detail="Invalid master_connection_id")
 
-    project_id = supabase_service.create_project(
+    project_id = firestore_service.create_project(
         user_id=user_id,
         name=request.name,
         master_connection_id=request.master_connection_id
     )
     
     # Log activity
-    supabase_service.log_activity(
+    firestore_service.log_activity(
         user_id=user_id,
         project_id=project_id,
         action="Created project",
         details=f"Project '{request.name}' created."
     )
     
-    return supabase_service.get_project(project_id)
+    return firestore_service.get_project(project_id)
 
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
@@ -55,7 +55,7 @@ async def get_project(
 ):
     """Get project details."""
     user_id = current_user["user_id"]
-    project = supabase_service.get_project(project_id)
+    project = firestore_service.get_project(project_id)
     
     if not project or project.get('user_id') != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -71,7 +71,7 @@ async def update_project(
 ):
     """Update project details (e.g. change master account)."""
     user_id = current_user["user_id"]
-    project = supabase_service.get_project(project_id)
+    project = firestore_service.get_project(project_id)
     
     if not project or project.get('user_id') != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -84,23 +84,23 @@ async def update_project(
         
     if master_connection_id:
         # Verify ownership
-        conn = supabase_service.get_youtube_connection(master_connection_id, user_id)
+        conn = firestore_service.get_youtube_connection(master_connection_id, user_id)
         if not conn:
              raise HTTPException(status_code=400, detail="Invalid master_connection_id")
         updates['master_connection_id'] = master_connection_id
         log_details.append(f"Master connection updated to {master_connection_id}")
         
     if updates:
-        supabase_service.update_project(project_id, **updates)
+        firestore_service.update_project(project_id, **updates)
         # Log activity
-        supabase_service.log_activity(
+        firestore_service.log_activity(
             user_id=user_id,
             project_id=project_id,
             action="Updated project",
             details=", ".join(log_details)
         )
         
-    return supabase_service.get_project(project_id)
+    return firestore_service.get_project(project_id)
 
 @router.delete("/{project_id}")
 async def delete_project(
@@ -109,16 +109,16 @@ async def delete_project(
 ):
     """Delete a project."""
     user_id = current_user["user_id"]
-    project = supabase_service.get_project(project_id)
+    project = firestore_service.get_project(project_id)
     if not project or project.get('user_id') != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
     
     project_name = project.get('name', 'Untitled Project')
     
-    supabase_service.delete_project(project_id)
+    firestore_service.delete_project(project_id)
     
     # Log activity (orphan log since project is deleted, but user_id remains)
-    supabase_service.log_activity(
+    firestore_service.log_activity(
         user_id=user_id,
         project_id=project_id,
         action="Deleted project",
@@ -137,11 +137,11 @@ async def list_project_activity(
     user_id = current_user["user_id"]
     
     # Verify project ownership
-    project = supabase_service.get_project(project_id)
+    project = firestore_service.get_project(project_id)
     if not project or project.get('user_id') != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
         
-    logs = supabase_service.list_activity_logs(user_id=user_id, project_id=project_id, limit=limit)
+    logs = firestore_service.list_activity_logs(user_id=user_id, project_id=project_id, limit=limit)
     
     # Convert timestamps
     for log in logs:
