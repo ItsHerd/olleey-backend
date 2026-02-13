@@ -14,7 +14,7 @@ from firebase_admin import auth
 from config import settings
 from schemas.auth import YouTubeConnectionResponse, YouTubeConnectionListResponse, UpdateConnectionRequest
 from schemas.channels import ChannelGraphResponse, YouTubeConnectionNode, LanguageChannelNode, ChannelNodeStatus
-from services.firestore import firestore_service
+from services.supabase_db import supabase_service as firestore_service
 from middleware.auth import get_current_user, get_optional_user
 from utils.languages import LANGUAGE_NAMES
 
@@ -199,9 +199,13 @@ async def initiate_youtube_connection(
     # If not, try query parameter
     if token:
         try:
-            decoded_token = auth.verify_id_token(token)
-            user_id = decoded_token["uid"]
-            user_token = token  # Store the actual token
+            # Verify Supabase token
+            user_response = firestore_service.client.auth.get_user(token)
+            if user_response.user:
+                user_id = user_response.user.id
+                user_token = token  # Store the actual token
+            else:
+                raise Exception("Invalid token")
         except Exception as e:
             raise HTTPException(
                 status_code=401,
@@ -272,7 +276,7 @@ async def youtube_connection_callback(
     code: Optional[str] = None,
     error: Optional[str] = None,
     state: Optional[str] = None,
-    token: Optional[str] = Query(None, description="Firebase ID token (passed from frontend via state or stored in session)"),
+    token: Optional[str] = Query(None, description="Supabase ID token (passed from frontend via state or stored in session)"),
     current_user: Optional[dict] = Depends(get_optional_user)
 ):
     """
@@ -314,8 +318,12 @@ async def youtube_connection_callback(
     # Try query parameter
     elif token:
         try:
-            decoded_token = auth.verify_id_token(token)
-            user_id = decoded_token["uid"]
+            # Verify Supabase token
+            user_response = firestore_service.client.auth.get_user(token)
+            if user_response.user:
+                user_id = user_response.user.id
+            else:
+                raise Exception("Invalid token")
         except Exception as e:
             frontend_url = getattr(settings, 'frontend_url', None) or "http://localhost:3000"
             if not frontend_url.startswith('http://') and not frontend_url.startswith('https://'):
@@ -333,9 +341,11 @@ async def youtube_connection_callback(
             user_token = state_data.get("user_token")
             master_connection_id = state_data.get("master_connection_id")  # Extract master connection ID
             if user_token:
-                decoded_token = auth.verify_id_token(user_token)
-                user_id = decoded_token["uid"]
-                print(f"[CALLBACK] Identified User ID from state: {user_id}")
+                # Verify Supabase token from state
+                user_response = firestore_service.client.auth.get_user(user_token)
+                if user_response.user:
+                    user_id = user_response.user.id
+                    print(f"[CALLBACK] Identified User ID from state: {user_id}")
         except Exception as e:
             print(f"[CALLBACK] Failed to parse state or verify token: {str(e)}")
             pass  # State might not contain token, that's okay

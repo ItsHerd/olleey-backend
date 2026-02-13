@@ -7,17 +7,21 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 import os
 
 from config import settings
-from routers import auth, videos, localization, webhooks, channels, jobs, youtube_connect, dashboard, settings as settings_router, events, projects
+from routers import auth, videos, localization, webhooks, channels, jobs, youtube_connect, dashboard, settings as settings_router, events, projects, costs
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize services on startup."""
-    # Initialize Firestore (will be done automatically on first use)
     # Initialize local storage directory
     storage_dir = getattr(settings, 'local_storage_dir', './storage')
     os.makedirs(storage_dir, exist_ok=True)
     os.makedirs(os.path.join(storage_dir, 'videos'), exist_ok=True)
+    
+    # Validate demo configuration
+    from config import validate_demo_config
+    validate_demo_config()
+    
     yield
 
 
@@ -59,6 +63,7 @@ app.include_router(jobs.router)
 app.include_router(projects.router)
 app.include_router(settings_router.router)
 app.include_router(events.router)
+app.include_router(costs.router)
 
 # Mount storage directory for serving processed videos
 storage_dir = getattr(settings, 'local_storage_dir', './storage')

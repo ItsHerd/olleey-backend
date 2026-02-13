@@ -10,10 +10,9 @@ This service provides a fully interactive demo experience that:
 
 import asyncio
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any
-from firebase_admin import firestore as firestore_admin
-from services.firestore import firestore_service
+from services.supabase_db import supabase_service as firestore_service
 
 DEMO_EMAIL = "demo@olleey.com"
 DEMO_PASSWORD = "password"
@@ -119,7 +118,10 @@ class DemoSimulator:
     """Handles demo user simulation and data reset."""
     
     def __init__(self):
-        self.db = firestore_service.db
+        # Note: Demo simulator now uses Supabase instead of Firestore
+        # Seeding functions that used self.db directly are disabled for now
+        # Only is_demo_user() is needed for the mock pipeline to work
+        pass
     
     def is_demo_user(self, user_id: str = None, email: str = None) -> bool:
         """Check if user is the demo user."""
@@ -127,9 +129,10 @@ class DemoSimulator:
             return email == DEMO_EMAIL
         if user_id:
             try:
-                from firebase_admin import auth
-                user = auth.get_user(user_id)
-                return user.email == DEMO_EMAIL
+                user = firestore_service.get_user(user_id)
+                if user:
+                    return user.get("email") == DEMO_EMAIL
+                return False
             except:
                 return False
         return False
@@ -152,42 +155,34 @@ class DemoSimulator:
     async def _cleanup_demo_data(self, user_id: str):
         """Clean up all demo data."""
         # Delete processing jobs
-        jobs_ref = self.db.collection('processing_jobs')
-        jobs_query = firestore_service._where(jobs_ref, 'user_id', '==', user_id)
-        for doc in jobs_query.stream():
-            doc.reference.delete()
+        try:
+            firestore_service.client.table('processing_jobs').delete().eq('user_id', user_id).execute()
+        except: pass
         
         # Delete localized videos
-        videos_ref = self.db.collection('localized_videos')
-        videos_query = firestore_service._where(videos_ref, 'user_id', '==', user_id)
-        for doc in videos_query.stream():
-            doc.reference.delete()
+        try:
+            firestore_service.client.table('localized_videos').delete().eq('user_id', user_id).execute()
+        except: pass
         
         # Delete projects (keep default, remove others)
-        projects_ref = self.db.collection('projects')
-        projects_query = firestore_service._where(projects_ref, 'user_id', '==', user_id)
-        for doc in projects_query.stream():
-            data = doc.to_dict()
-            if data.get('name') != 'Default Project':
-                doc.reference.delete()
+        try:
+            firestore_service.client.table('projects').delete().eq('user_id', user_id).neq('name', 'Default Project').execute()
+        except: pass
         
         # Delete language channels
-        channels_ref = self.db.collection('language_channels')
-        channels_query = firestore_service._where(channels_ref, 'user_id', '==', user_id)
-        for doc in channels_query.stream():
-            doc.reference.delete()
+        try:
+            firestore_service.client.table('channels').delete().eq('user_id', user_id).execute()
+        except: pass
         
         # Delete youtube connections
-        connections_ref = self.db.collection('youtube_connections')
-        connections_query = firestore_service._where(connections_ref, 'user_id', '==', user_id)
-        for doc in connections_query.stream():
-            doc.reference.delete()
+        try:
+            firestore_service.client.table('youtube_connections').delete().eq('user_id', user_id).execute()
+        except: pass
         
         # Delete activity logs
-        logs_ref = self.db.collection('activity_logs')
-        logs_query = firestore_service._where(logs_ref, 'user_id', '==', user_id)
-        for doc in logs_query.stream():
-            doc.reference.delete()
+        try:
+            firestore_service.client.table('activity_logs').delete().eq('user_id', user_id).execute()
+        except: pass
     
     async def _create_demo_data(self, user_id: str):
         """Create fresh demo data."""
@@ -242,11 +237,13 @@ class DemoSimulator:
     async def _create_demo_jobs(self, user_id: str, project_workflow: str, project_music: str, master_channel_id: str):
         """Create demo jobs in various states."""
         print(f"[DEMO] Creating demo jobs for user {user_id}")
-        print(f"[DEMO] Total source videos available: {len(DEMO_CONFIG['source_videos'])}")
+        
+        now = datetime.now(timezone.utc).isoformat()
         
         # Job 1: Waiting Approval (3 languages)
         job_1 = str(uuid.uuid4())
-        self.db.collection('processing_jobs').document(job_1).set({
+        firestore_service.client.table('processing_jobs').insert({
+            'job_id': job_1,
             'source_video_id': DEMO_CONFIG["source_videos"][1]['id'],
             'source_channel_id': master_channel_id,
             'user_id': user_id,
@@ -255,9 +252,9 @@ class DemoSimulator:
             'target_languages': ['es', 'de', 'it'],
             'progress': 100,
             'is_simulation': True,
-            'created_at': firestore_admin.SERVER_TIMESTAMP,
-            'updated_at': firestore_admin.SERVER_TIMESTAMP
-        })
+            'created_at': now,
+            'updated_at': now
+        }).execute()
         
         # Create localized videos for job 1
         for lang in ['es', 'de', 'it']:
@@ -265,7 +262,8 @@ class DemoSimulator:
         
         # Job 2: Waiting Approval (5 languages)
         job_2 = str(uuid.uuid4())
-        self.db.collection('processing_jobs').document(job_2).set({
+        firestore_service.client.table('processing_jobs').insert({
+            'job_id': job_2,
             'source_video_id': DEMO_CONFIG["source_videos"][3]['id'],
             'source_channel_id': master_channel_id,
             'user_id': user_id,
@@ -274,16 +272,17 @@ class DemoSimulator:
             'target_languages': ['es', 'fr', 'de', 'it', 'pt'],
             'progress': 100,
             'is_simulation': True,
-            'created_at': firestore_admin.SERVER_TIMESTAMP,
-            'updated_at': firestore_admin.SERVER_TIMESTAMP
-        })
+            'created_at': now,
+            'updated_at': now
+        }).execute()
         
         for lang in ['es', 'fr', 'de', 'it', 'pt']:
             self._create_localized_video(job_2, DEMO_CONFIG["source_videos"][3], lang, 'waiting_approval', user_id)
         
         # Job 3: Processing (simulated progress)
         job_3 = str(uuid.uuid4())
-        self.db.collection('processing_jobs').document(job_3).set({
+        firestore_service.client.table('processing_jobs').insert({
+            'job_id': job_3,
             'source_video_id': DEMO_CONFIG["source_videos"][2]['id'],
             'source_channel_id': master_channel_id,
             'user_id': user_id,
@@ -292,37 +291,37 @@ class DemoSimulator:
             'target_languages': ['ja', 'pt'],
             'progress': 45,
             'is_simulation': True,
-            'created_at': firestore_admin.SERVER_TIMESTAMP,
-            'updated_at': firestore_admin.SERVER_TIMESTAMP
-        })
+            'created_at': now,
+            'updated_at': now
+        }).execute()
         
         for lang in ['ja', 'pt']:
             self._create_localized_video(job_3, DEMO_CONFIG["source_videos"][2], lang, 'processing', user_id)
         
-        # Job 4: Completed (Put all published in project_workflow since it's the default)
+        # Job 4: Completed
         job_4 = str(uuid.uuid4())
-        self.db.collection('processing_jobs').document(job_4).set({
+        firestore_service.client.table('processing_jobs').insert({
+            'job_id': job_4,
             'source_video_id': DEMO_CONFIG["source_videos"][0]['id'],
             'source_channel_id': master_channel_id,
             'user_id': user_id,
-            'project_id': project_workflow,  # Changed to workflow
+            'project_id': project_workflow,
             'status': 'completed',
             'target_languages': ['es', 'de', 'fr'],
             'progress': 100,
             'is_simulation': True,
-            'completed_at': firestore_admin.SERVER_TIMESTAMP,
-            'created_at': firestore_admin.SERVER_TIMESTAMP,
-            'updated_at': firestore_admin.SERVER_TIMESTAMP
-        })
+            'completed_at': now,
+            'created_at': now,
+            'updated_at': now
+        }).execute()
         
         for lang in ['es', 'de', 'fr']:
             self._create_localized_video(job_4, DEMO_CONFIG["source_videos"][0], lang, 'published', user_id)
         
-        print(f"[DEMO] Created Job 4 (published): {DEMO_CONFIG['source_videos'][0]['title']} with 3 languages")
-        
-        # Job 5: Published (More released media)
+        # Job 5: Published
         job_5 = str(uuid.uuid4())
-        self.db.collection('processing_jobs').document(job_5).set({
+        firestore_service.client.table('processing_jobs').insert({
+            'job_id': job_5,
             'source_video_id': DEMO_CONFIG["source_videos"][1]['id'],
             'source_channel_id': master_channel_id,
             'user_id': user_id,
@@ -331,36 +330,38 @@ class DemoSimulator:
             'target_languages': ['es', 'fr', 'it', 'pt'],
             'progress': 100,
             'is_simulation': True,
-            'completed_at': firestore_admin.SERVER_TIMESTAMP,
-            'created_at': firestore_admin.SERVER_TIMESTAMP,
-            'updated_at': firestore_admin.SERVER_TIMESTAMP
-        })
+            'completed_at': now,
+            'created_at': now,
+            'updated_at': now
+        }).execute()
         
         for lang in ['es', 'fr', 'it', 'pt']:
             self._create_localized_video(job_5, DEMO_CONFIG["source_videos"][1], lang, 'published', user_id)
         
-        # Job 6: Published (Even more released media)
+        # Job 6: Published
         job_6 = str(uuid.uuid4())
-        self.db.collection('processing_jobs').document(job_6).set({
+        firestore_service.client.table('processing_jobs').insert({
+            'job_id': job_6,
             'source_video_id': DEMO_CONFIG["source_videos"][2]['id'],
             'source_channel_id': master_channel_id,
             'user_id': user_id,
-            'project_id': project_workflow,  # Changed to workflow
+            'project_id': project_workflow,
             'status': 'completed',
             'target_languages': ['de', 'ja'],
             'progress': 100,
             'is_simulation': True,
-            'completed_at': firestore_admin.SERVER_TIMESTAMP,
-            'created_at': firestore_admin.SERVER_TIMESTAMP,
-            'updated_at': firestore_admin.SERVER_TIMESTAMP
-        })
+            'completed_at': now,
+            'created_at': now,
+            'updated_at': now
+        }).execute()
         
         for lang in ['de', 'ja']:
             self._create_localized_video(job_6, DEMO_CONFIG["source_videos"][2], lang, 'published', user_id)
         
-        # Job 7: Published (Additional released media)
+        # Job 7: Published
         job_7 = str(uuid.uuid4())
-        self.db.collection('processing_jobs').document(job_7).set({
+        firestore_service.client.table('processing_jobs').insert({
+            'job_id': job_7,
             'source_video_id': DEMO_CONFIG["source_videos"][3]['id'],
             'source_channel_id': master_channel_id,
             'user_id': user_id,
@@ -369,21 +370,19 @@ class DemoSimulator:
             'target_languages': ['es', 'de', 'fr', 'pt', 'ja'],
             'progress': 100,
             'is_simulation': True,
-            'completed_at': firestore_admin.SERVER_TIMESTAMP,
-            'created_at': firestore_admin.SERVER_TIMESTAMP,
-            'updated_at': firestore_admin.SERVER_TIMESTAMP
-        })
+            'completed_at': now,
+            'created_at': now,
+            'updated_at': now
+        }).execute()
         
         for lang in ['es', 'de', 'fr', 'pt', 'ja']:
             self._create_localized_video(job_7, DEMO_CONFIG["source_videos"][3], lang, 'published', user_id)
         
-        print(f"[DEMO] Jobs 1-7 created. Checking for additional videos...")
-        print(f"[DEMO] Source videos count: {len(DEMO_CONFIG['source_videos'])}")
-        
-        # Job 8: Published (More variety)
+        # More jobs for variety
         if len(DEMO_CONFIG["source_videos"]) > 4:
             job_8 = str(uuid.uuid4())
-            self.db.collection('processing_jobs').document(job_8).set({
+            firestore_service.client.table('processing_jobs').insert({
+                'job_id': job_8,
                 'source_video_id': DEMO_CONFIG["source_videos"][4]['id'],
                 'source_channel_id': master_channel_id,
                 'user_id': user_id,
@@ -392,18 +391,17 @@ class DemoSimulator:
                 'target_languages': ['es', 'fr', 'de'],
                 'progress': 100,
                 'is_simulation': True,
-                'completed_at': firestore_admin.SERVER_TIMESTAMP,
-                'created_at': firestore_admin.SERVER_TIMESTAMP,
-                'updated_at': firestore_admin.SERVER_TIMESTAMP
-            })
-            
+                'completed_at': now,
+                'created_at': now,
+                'updated_at': now
+            }).execute()
             for lang in ['es', 'fr', 'de']:
                 self._create_localized_video(job_8, DEMO_CONFIG["source_videos"][4], lang, 'published', user_id)
         
-        # Job 9: Published
         if len(DEMO_CONFIG["source_videos"]) > 5:
             job_9 = str(uuid.uuid4())
-            self.db.collection('processing_jobs').document(job_9).set({
+            firestore_service.client.table('processing_jobs').insert({
+                'job_id': job_9,
                 'source_video_id': DEMO_CONFIG["source_videos"][5]['id'],
                 'source_channel_id': master_channel_id,
                 'user_id': user_id,
@@ -412,18 +410,17 @@ class DemoSimulator:
                 'target_languages': ['es', 'it', 'pt'],
                 'progress': 100,
                 'is_simulation': True,
-                'completed_at': firestore_admin.SERVER_TIMESTAMP,
-                'created_at': firestore_admin.SERVER_TIMESTAMP,
-                'updated_at': firestore_admin.SERVER_TIMESTAMP
-            })
-            
+                'completed_at': now,
+                'created_at': now,
+                'updated_at': now
+            }).execute()
             for lang in ['es', 'it', 'pt']:
                 self._create_localized_video(job_9, DEMO_CONFIG["source_videos"][5], lang, 'published', user_id)
         
-        # Job 10: Processing (More variety in queue)
         if len(DEMO_CONFIG["source_videos"]) > 6:
             job_10 = str(uuid.uuid4())
-            self.db.collection('processing_jobs').document(job_10).set({
+            firestore_service.client.table('processing_jobs').insert({
+                'job_id': job_10,
                 'source_video_id': DEMO_CONFIG["source_videos"][6]['id'],
                 'source_channel_id': master_channel_id,
                 'user_id': user_id,
@@ -432,31 +429,11 @@ class DemoSimulator:
                 'target_languages': ['es', 'de', 'fr'],
                 'progress': 65,
                 'is_simulation': True,
-                'created_at': firestore_admin.SERVER_TIMESTAMP,
-                'updated_at': firestore_admin.SERVER_TIMESTAMP
-            })
-            
+                'created_at': now,
+                'updated_at': now
+            }).execute()
             for lang in ['es', 'de', 'fr']:
                 self._create_localized_video(job_10, DEMO_CONFIG["source_videos"][6], lang, 'processing', user_id)
-        
-        # Job 11: Waiting Approval (More in review queue)
-        if len(DEMO_CONFIG["source_videos"]) > 7:
-            job_11 = str(uuid.uuid4())
-            self.db.collection('processing_jobs').document(job_11).set({
-                'source_video_id': DEMO_CONFIG["source_videos"][7]['id'],
-                'source_channel_id': master_channel_id,
-                'user_id': user_id,
-                'project_id': project_workflow,
-                'status': 'waiting_approval',
-                'target_languages': ['es', 'fr', 'it'],
-                'progress': 100,
-                'is_simulation': True,
-                'created_at': firestore_admin.SERVER_TIMESTAMP,
-                'updated_at': firestore_admin.SERVER_TIMESTAMP
-            })
-            
-            for lang in ['es', 'fr', 'it']:
-                self._create_localized_video(job_11, DEMO_CONFIG["source_videos"][7], lang, 'waiting_approval', user_id)
         
         print(f"[DEMO] Finished creating all demo jobs")
     
@@ -471,7 +448,6 @@ class DemoSimulator:
         localized_video_id = None
         
         if status in ['waiting_approval', 'published']:
-            # Use S3 URL for real demo video's Spanish localization
             if source_video['id'] == 'demo_real_video_001' and lang_code == 'es':
                 storage_url = "https://olleey-videos.s3.us-west-1.amazonaws.com/es.mov"
             else:
@@ -480,7 +456,10 @@ class DemoSimulator:
         if status == 'published':
             localized_video_id = f"VID{uuid.uuid4().hex[:10]}"
         
+        now = datetime.now(timezone.utc).isoformat()
+        
         video_data = {
+            'id': video_id,
             'job_id': job_id,
             'source_video_id': source_video['id'],
             'localized_video_id': localized_video_id,
@@ -494,18 +473,18 @@ class DemoSimulator:
             'description': f"AI-dubbed version in {lang_name}. Demo simulation.",
             'duration': source_video.get('duration', 210),
             'is_simulation': True,
-            'created_at': firestore_admin.SERVER_TIMESTAMP,
-            'updated_at': firestore_admin.SERVER_TIMESTAMP
+            'created_at': now,
+            'updated_at': now
         }
         
         if status == 'published':
-            video_data['published_at'] = firestore_admin.SERVER_TIMESTAMP
+            video_data['published_at'] = now
         
-        self.db.collection('localized_videos').document(video_id).set(video_data)
+        firestore_service.client.table('localized_videos').insert(video_data).execute()
     
     def _create_demo_activities(self, user_id: str, project_workflow: str, project_music: str):
         """Create initial demo activity logs."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         activities = [
             {
@@ -514,7 +493,7 @@ class DemoSimulator:
                 'action': 'Videos approved and published',
                 'status': 'success',
                 'details': 'Published 3 language version(s): Spanish, German, French',
-                'timestamp': now - timedelta(hours=5),
+                'timestamp': (now - timedelta(hours=5)).isoformat()
             },
             {
                 'user_id': user_id,
@@ -522,7 +501,7 @@ class DemoSimulator:
                 'action': 'Video uploaded',
                 'status': 'info',
                 'details': 'Luis Fonsi - Despacito uploaded for dubbing',
-                'timestamp': now - timedelta(hours=2),
+                'timestamp': (now - timedelta(hours=2)).isoformat()
             },
             {
                 'user_id': user_id,
@@ -530,7 +509,7 @@ class DemoSimulator:
                 'action': 'Processing started',
                 'status': 'info',
                 'details': 'Started dubbing to 5 languages',
-                'timestamp': now - timedelta(hours=1, minutes=55),
+                'timestamp': (now - timedelta(hours=1, minutes=55)).isoformat()
             },
             {
                 'user_id': user_id,
@@ -538,7 +517,7 @@ class DemoSimulator:
                 'action': 'Processing completed',
                 'status': 'success',
                 'details': 'All language versions ready for review',
-                'timestamp': now - timedelta(hours=1, minutes=30),
+                'timestamp': (now - timedelta(hours=1, minutes=30)).isoformat()
             },
             {
                 'user_id': user_id,
@@ -546,143 +525,63 @@ class DemoSimulator:
                 'action': 'Videos approved and published',
                 'status': 'success',
                 'details': 'Published 4 language version(s): Spanish, French, Italian, Portuguese',
-                'timestamp': now - timedelta(hours=1),
-            },
-            {
-                'user_id': user_id,
-                'project_id': project_music,
-                'action': 'Video uploaded',
-                'status': 'info',
-                'details': 'PSY - GANGNAM STYLE uploaded for dubbing',
-                'timestamp': now - timedelta(minutes=45),
-            },
-            {
-                'user_id': user_id,
-                'project_id': project_music,
-                'action': 'Processing started',
-                'status': 'info',
-                'details': 'Started dubbing to Japanese and Portuguese',
-                'timestamp': now - timedelta(minutes=40),
-            },
-            {
-                'user_id': user_id,
-                'project_id': project_workflow,
-                'action': 'Video uploaded',
-                'status': 'info',
-                'details': 'Me at the zoo uploaded for dubbing',
-                'timestamp': now - timedelta(minutes=20),
-            },
-            {
-                'user_id': user_id,
-                'project_id': project_workflow,
-                'action': 'Processing completed',
-                'status': 'success',
-                'details': 'Spanish, German, and Italian versions ready',
-                'timestamp': now - timedelta(minutes=5),
-            },
-            {
-                'user_id': user_id,
-                'project_id': project_workflow,
-                'action': 'Videos approved and published',
-                'status': 'success',
-                'details': 'Published 5 language version(s): Spanish, German, French, Portuguese, Japanese',
-                'timestamp': now - timedelta(minutes=2),
-            },
+                'timestamp': (now - timedelta(hours=1)).isoformat()
+            }
         ]
         
         for activity in activities:
-            # Create activity log manually with custom timestamp
             log_id = str(uuid.uuid4())
-            self.db.collection('activity_logs').document(log_id).set({
-                'user_id': activity['user_id'],
-                'project_id': activity['project_id'],
-                'action': activity['action'],
-                'status': activity['status'],
-                'details': activity['details'],
-                'timestamp': activity['timestamp']
-            })
+            firestore_service.client.table('activity_logs').insert({
+                'id': log_id,
+                **activity
+            }).execute()
         
         print(f"[DEMO] Created {len(activities)} activity logs")
     
     async def simulate_approval(self, user_id: str, job_id: str, video_ids: List[str], action: str):
-        """Simulate video approval/rejection with realistic delays."""
+        """Simulate video approval/rejection."""
         if not self.is_demo_user(user_id):
             return
         
-        print(f"[DEMO] Simulating {action} for job {job_id}, videos: {video_ids}")
-        
-        # Simulate processing delay
         await asyncio.sleep(1)
+        now = datetime.now(timezone.utc).isoformat()
         
         if action == "approve":
-            # Update videos to published status
             for video_id in video_ids:
-                video_ref = self.db.collection('localized_videos').document(video_id)
-                video_ref.update({
+                firestore_service.client.table('localized_videos').update({
                     'status': 'published',
                     'localized_video_id': f"VID{uuid.uuid4().hex[:10]}",
-                    'published_at': firestore_admin.SERVER_TIMESTAMP,
-                    'updated_at': firestore_admin.SERVER_TIMESTAMP
-                })
+                    'published_at': now,
+                    'updated_at': now
+                }).eq('id', video_id).execute()
             
-            # Check if all videos are now published/rejected
-            job_ref = self.db.collection('processing_jobs').document(job_id)
-            job = job_ref.get().to_dict()
-            
-            videos_ref = self.db.collection('localized_videos')
-            videos_query = firestore_service._where(videos_ref, 'job_id', '==', job_id)
-            all_videos = list(videos_query.stream())
-            
-            all_decided = all(
-                v.to_dict().get('status') in ['published', 'rejected']
-                for v in all_videos
-            )
+            # Check if all videos decided
+            all_videos = firestore_service.client.table('localized_videos').select('status').eq('job_id', job_id).execute().data
+            all_decided = all(v.get('status') in ['published', 'rejected'] for v in all_videos)
             
             if all_decided:
-                job_ref.update({
+                firestore_service.client.table('processing_jobs').update({
                     'status': 'completed',
-                    'completed_at': firestore_admin.SERVER_TIMESTAMP,
-                    'updated_at': firestore_admin.SERVER_TIMESTAMP
-                })
+                    'completed_at': now,
+                    'updated_at': now
+                }).eq('job_id', job_id).execute()
         
         elif action == "reject":
-            # Update videos to rejected status
             for video_id in video_ids:
-                video_ref = self.db.collection('localized_videos').document(video_id)
-                video_ref.update({
+                firestore_service.client.table('localized_videos').update({
                     'status': 'rejected',
-                    'updated_at': firestore_admin.SERVER_TIMESTAMP
-                })
+                    'updated_at': now
+                }).eq('id', video_id).execute()
         
-        # Log activity with more details
-        job_ref = self.db.collection('processing_jobs').document(job_id)
-        job = job_ref.get().to_dict()
-        
-        if action == "approve":
-            # Get language names for the approved videos
-            approved_langs = []
-            for video_id in video_ids:
-                video = self.db.collection('localized_videos').document(video_id).get().to_dict()
-                if video:
-                    approved_langs.append(video.get('language_code', ''))
-            
-            lang_names = {'es': 'Spanish', 'de': 'German', 'fr': 'French', 'it': 'Italian', 'pt': 'Portuguese', 'ja': 'Japanese'}
-            lang_list = ', '.join([lang_names.get(lang, lang) for lang in approved_langs if lang])
-            
+        # Log activity
+        job = firestore_service.get_processing_job(job_id)
+        if job:
             firestore_service.log_activity(
                 user_id=user_id,
                 project_id=job.get('project_id'),
-                action="Videos approved and published",
-                status='success',
-                details=f"Published {len(video_ids)} language version(s): {lang_list}"
-            )
-        else:
-            firestore_service.log_activity(
-                user_id=user_id,
-                project_id=job.get('project_id'),
-                action=f"Videos {action}d",
-                status='warning' if action == 'reject' else 'success',
-                details=f"{len(video_ids)} video(s) {action}d for revision"
+                action="Videos approved and published" if action == "approve" else "Videos rejected",
+                status='success' if action == "approve" else 'warning',
+                details=f"{len(video_ids)} video(s) {action}d"
             )
     
     async def simulate_processing_progress(self, user_id: str, job_id: str):
@@ -690,143 +589,75 @@ class DemoSimulator:
         if not self.is_demo_user(user_id):
             return
         
-        job_ref = self.db.collection('processing_jobs').document(job_id)
-        job = job_ref.get()
-        
-        if not job.exists:
+        job = firestore_service.get_processing_job(job_id)
+        if not job:
             return
         
-        job_data = job.to_dict()
-        current_progress = job_data.get('progress', 0)
+        new_progress = min(job.get('progress', 0) + 15, 95)
+        now = datetime.now(timezone.utc).isoformat()
         
-        # Increment progress
-        new_progress = min(current_progress + 15, 95)  # Cap at 95% until completion
-        
-        job_ref.update({
+        firestore_service.client.table('processing_jobs').update({
             'progress': new_progress,
-            'updated_at': firestore_admin.SERVER_TIMESTAMP
-        })
+            'updated_at': now
+        }).eq('job_id', job_id).execute()
         
-        # Update video statuses if needed
         if new_progress >= 95:
-            videos_ref = self.db.collection('localized_videos')
-            videos_query = firestore_service._where(videos_ref, 'job_id', '==', job_id)
-            for video_doc in videos_query.stream():
-                video_doc.reference.update({
-                    'status': 'waiting_approval',
-                    'storage_url': f"gs://demo-bucket/videos/{job_id}/{video_doc.to_dict()['language_code']}/output.mp4",
-                    'updated_at': firestore_admin.SERVER_TIMESTAMP
-                })
+            firestore_service.client.table('localized_videos').update({
+                'status': 'waiting_approval',
+                'updated_at': now
+            }).eq('job_id', job_id).execute()
             
-            job_ref.update({
+            firestore_service.client.table('processing_jobs').update({
                 'status': 'waiting_approval',
                 'progress': 100,
-                'updated_at': firestore_admin.SERVER_TIMESTAMP
-            })
+                'updated_at': now
+            }).eq('job_id', job_id).execute()
     
     async def simulate_job_creation(self, user_id: str, source_video_id: str, target_languages: List[str], project_id: str):
         """Simulate creating a new dubbing job."""
         if not self.is_demo_user(user_id):
             return None
         
-        print(f"[DEMO] Simulating job creation for video {source_video_id}")
-        
-        # Find video info
-        video_info = next(
-            (v for v in DEMO_CONFIG["source_videos"] if v['id'] == source_video_id),
-            DEMO_CONFIG["source_videos"][0]
-        )
-        
-        # Create job
         job_id = str(uuid.uuid4())
-        master_channel_id = DEMO_CONFIG["master_channel"]["id"]
+        now = datetime.now(timezone.utc).isoformat()
         
-        self.db.collection('processing_jobs').document(job_id).set({
+        firestore_service.client.table('processing_jobs').insert({
+            'job_id': job_id,
             'source_video_id': source_video_id,
-            'source_channel_id': master_channel_id,
+            'source_channel_id': DEMO_CONFIG["master_channel"]["id"],
             'user_id': user_id,
             'project_id': project_id,
             'status': 'processing',
             'target_languages': target_languages,
             'progress': 0,
             'is_simulation': True,
-            'created_at': firestore_admin.SERVER_TIMESTAMP,
-            'updated_at': firestore_admin.SERVER_TIMESTAMP
-        })
+            'created_at': now,
+            'updated_at': now
+        }).execute()
         
-        # Create placeholder videos
-        for lang in target_languages:
-            self._create_localized_video(job_id, video_info, lang, 'processing', user_id)
-        
-        # Start background progress simulation
+        # Start background simulation
         asyncio.create_task(self._simulate_job_progress(user_id, job_id))
-        
         return job_id
-    
+
     async def _simulate_job_progress(self, user_id: str, job_id: str):
-        """Background task to simulate job progress."""
-        while True:
-            await asyncio.sleep(10)  # Update every 10 seconds
-            
-            job_ref = self.db.collection('processing_jobs').document(job_id)
-            job = job_ref.get()
-            
-            if not job.exists:
+        """Background task for job progress."""
+        for _ in range(10):
+            await asyncio.sleep(5)
+            job = firestore_service.get_processing_job(job_id)
+            if not job or job.get('status') != 'processing':
                 break
-            
-            job_data = job.to_dict()
-            status = job_data.get('status')
-            
-            if status != 'processing':
-                break
-            
             await self.simulate_processing_progress(user_id, job_id)
-    
+
     async def start_processing(self, user_id: str, job_id: str, language_code: str = 'es') -> Dict[str, Any]:
-        """
-        Start processing a queued job (3-4 second simulation).
-        
-        Simulates the dubbing workflow with realistic timing.
-        """
-        # Update job to processing
-        job_ref = self.db.collection('processing_jobs').document(job_id)
-        job_ref.update({
+        """Start processing a job."""
+        now = datetime.now(timezone.utc).isoformat()
+        firestore_service.client.table('processing_jobs').update({
             'status': 'processing',
             'progress': 0,
-            'updated_at': firestore_admin.SERVER_TIMESTAMP
-        })
+            'updated_at': now
+        }).eq('job_id', job_id).execute()
+        return {"status": "success"}
         
-        # Update localized video to processing
-        localized_videos = self.db.collection('localized_videos')
-        query = firestore_service._where(localized_videos, 'job_id', '==', job_id)
-        query = firestore_service._where(query, 'language_code', '==', language_code)
-        
-        for doc in query.stream():
-            doc.reference.update({
-                'status': 'processing',
-                'updated_at': firestore_admin.SERVER_TIMESTAMP
-            })
-        
-        # Simulate processing delay (3.5 seconds)
-        await asyncio.sleep(3.5)
-        
-        # Move to draft/waiting_approval with processed content
-        job_ref.update({
-            'status': 'waiting_approval',
-            'progress': 100,
-            'updated_at': firestore_admin.SERVER_TIMESTAMP
-        })
-        
-        for doc in query.stream():
-            doc.reference.update({
-                'status': 'waiting_approval',
-                'storage_url': 'https://olleey-videos.s3.us-west-1.amazonaws.com/es.mov',
-                'dubbed_audio_url': 'https://olleey-videos.s3.us-west-1.amazonaws.com/es-audio.mp3',
-                'updated_at': firestore_admin.SERVER_TIMESTAMP
-            })
-        
-        return {"success": True, "status": "waiting_approval"}
-    
     async def update_localization_status(
         self,
         user_id: str,
@@ -834,87 +665,34 @@ class DemoSimulator:
         language_code: str,
         new_status: str
     ) -> Dict[str, Any]:
-        """
-        Update localization status interactively for demo.
-        Supports: queued, processing, waiting_approval (draft), published (live)
-        """
-        # Validate status
-        valid_statuses = ['queued', 'processing', 'waiting_approval', 'published']
-        if new_status not in valid_statuses:
-            raise ValueError(f"Invalid status: {new_status}")
-        
-        # Update localized video in Firestore
-        localized_videos = self.db.collection('localized_videos')
-        query = firestore_service._where(localized_videos, 'job_id', '==', job_id)
-        query = firestore_service._where(query, 'language_code', '==', language_code)
-        
-        updated = False
-        for doc in query.stream():
-            doc.reference.update({
-                'status': new_status,
-                'updated_at': firestore_admin.SERVER_TIMESTAMP
-            })
+        """Update localization status interactively for demo."""
+        if not self.is_demo_user(user_id):
+            return {"success": False}
             
-            # If publishing, add localized_video_id and storage URL
-            if new_status == 'published':
-                updates = {
-                    'localized_video_id': f"demo_{language_code}_{uuid.uuid4().hex[:8]}",
-                    'published_at': firestore_admin.SERVER_TIMESTAMP
-                }
-                # Use S3 URL for Spanish, placeholder for others
-                if language_code == 'es':
-                    updates['storage_url'] = "https://olleey-videos.s3.us-west-1.amazonaws.com/es.mov"
-                else:
-                    updates['storage_url'] = f"gs://demo-bucket/videos/{job_id}/{language_code}/output.mp4"
-                doc.reference.update(updates)
-            elif new_status == 'waiting_approval':
-                # Set storage URL for waiting approval
-                if language_code == 'es':
-                    doc.reference.update({
-                        'storage_url': "https://olleey-videos.s3.us-west-1.amazonaws.com/es.mov"
-                    })
-                else:
-                    doc.reference.update({
-                        'storage_url': f"gs://demo-bucket/videos/{job_id}/{language_code}/output.mp4"
-                    })
-            
-            updated = True
+        now = datetime.now(timezone.utc).isoformat()
         
-        if not updated:
-            raise ValueError(f"No localized video found for job_id={job_id}, language_code={language_code}")
+        updates = {
+            'status': new_status,
+            'updated_at': now
+        }
         
-        # Update job status if needed
         if new_status == 'published':
-            # Check if all localizations are published
-            all_videos_query = firestore_service._where(localized_videos, 'job_id', '==', job_id)
-            all_videos = list(all_videos_query.stream())
-            if all(v.to_dict().get('status') == 'published' for v in all_videos):
-                jobs = self.db.collection('processing_jobs')
-                jobs.document(job_id).update({
-                    'status': 'completed',
-                    'progress': 100,
-                    'completed_at': firestore_admin.SERVER_TIMESTAMP,
-                    'updated_at': firestore_admin.SERVER_TIMESTAMP
-                })
-        elif new_status == 'waiting_approval':
-            # Update job to waiting_approval if it's processing
-            job_ref = self.db.collection('processing_jobs').document(job_id)
-            job = job_ref.get()
-            if job.exists and job.to_dict().get('status') == 'processing':
-                job_ref.update({
-                    'status': 'waiting_approval',
-                    'progress': 100,
-                    'updated_at': firestore_admin.SERVER_TIMESTAMP
-                })
-        elif new_status == 'processing':
-            # Update job to processing
-            job_ref = self.db.collection('processing_jobs').document(job_id)
-            job_ref.update({
-                'status': 'processing',
-                'progress': 50,
-                'updated_at': firestore_admin.SERVER_TIMESTAMP
-            })
+            updates['localized_video_id'] = f"demo_{language_code}_{uuid.uuid4().hex[:8]}"
+            updates['published_at'] = now
+            
+        firestore_service.client.table('localized_videos').update(updates).eq('job_id', job_id).eq('language_code', language_code).execute()
         
+        # Log activity
+        job = firestore_service.get_processing_job(job_id)
+        if job:
+            firestore_service.log_activity(
+                user_id=user_id,
+                project_id=job.get('project_id'),
+                action=f"Video {new_status}",
+                status='success',
+                details=f"Updated {language_code} to {new_status}"
+            )
+            
         return {"success": True, "status": new_status}
 
 

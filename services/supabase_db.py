@@ -295,85 +295,438 @@ class SupabaseService:
     # YOUTUBE CONNECTIONS (Still in Firestore)
     # ============================================================
 
+    def delete_project(self, project_id: str) -> bool:
+        """Delete a project."""
+        try:
+            self.client.table('projects').delete().eq('id', project_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error deleting project {project_id}: {e}")
+            return False
+
+    # ============================================================
+    # ACTIVITY LOGS
+    # ============================================================
+
+    def log_activity(
+        self,
+        user_id: str,
+        project_id: Optional[str],
+        action: str,
+        status: str = 'info',
+        details: Optional[str] = None
+    ) -> str:
+        """Log user activity."""
+        log_id = str(uuid.uuid4())
+        data = {
+            'id': log_id,
+            'user_id': user_id,
+            'project_id': project_id,
+            'action': action,
+            'status': status,
+            'details': details,
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }
+        try:
+            self.client.table('activity_logs').insert(data).execute()
+            return log_id
+        except Exception as e:
+            print(f"Error logging activity: {e}")
+            return ""
+
+    def list_activity_logs(
+        self,
+        user_id: str,
+        project_id: Optional[str] = None,
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """Get activity logs for a user."""
+        try:
+            query = self.client.table('activity_logs').select('*').eq('user_id', user_id)
+            if project_id:
+                query = query.eq('project_id', project_id)
+            
+            result = query.order('timestamp', desc=True).limit(limit).execute()
+            return result.data or []
+        except Exception as e:
+            print(f"Error listing activity logs: {e}")
+            return []
+
+    # ============================================================
+    # YOUTUBE CONNECTIONS
+    # ============================================================
+
+    def create_youtube_connection(self, user_id: str, youtube_channel_id: str,
+                                  access_token: str, refresh_token: str,
+                                  youtube_channel_name: Optional[str] = None,
+                                  token_expiry: Optional[datetime] = None,
+                                  is_primary: bool = False,
+                                  channel_avatar_url: Optional[str] = None,
+                                  master_connection_id: Optional[str] = None,
+                                  language_code: Optional[str] = None) -> str:
+        """Create YouTube channel connection."""
+        connection_id = str(uuid.uuid4())
+        data = {
+            'connection_id': connection_id,
+            'user_id': user_id,
+            'youtube_channel_id': youtube_channel_id,
+            'youtube_channel_name': youtube_channel_name,
+            'channel_avatar_url': channel_avatar_url,
+            'access_token': access_token,
+            'refresh_token': refresh_token,
+            'token_expiry': token_expiry.isoformat() if token_expiry else None,
+            'is_primary': is_primary,
+            'language_code': language_code,
+            'master_connection_id': master_connection_id,
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        }
+        try:
+            self.client.table('youtube_connections').insert(data).execute()
+            return connection_id
+        except Exception as e:
+            print(f"Error creating youtube connection: {e}")
+            return ""
+
     def get_youtube_connections(self, user_id: str) -> List[Dict[str, Any]]:
-        """Get YouTube connections - delegates to Firestore for now."""
-        # YouTube connections are managed by non-migrated routers
-        # Keep in Firestore until youtube_auth.py and youtube_connect.py are migrated
-        from services.firestore import firestore_service
-        return firestore_service.get_youtube_connections(user_id)
+        """Get YouTube connections."""
+        try:
+            result = self.client.table('youtube_connections').select('*').eq('user_id', user_id).execute()
+            return result.data or []
+        except Exception as e:
+            print(f"Error getting youtube connections: {e}")
+            return []
 
     def get_youtube_connection(self, connection_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-        """Get a single YouTube connection - delegates to Firestore for now."""
-        from services.firestore import firestore_service
-        return firestore_service.get_youtube_connection(connection_id, user_id)
+        """Get a single YouTube connection."""
+        try:
+            result = self.client.table('youtube_connections').select('*').eq('connection_id', connection_id).eq('user_id', user_id).single().execute()
+            return result.data if result.data else None
+        except Exception as e:
+            print(f"Error getting youtube connection {connection_id}: {e}")
+            return None
 
-    def get_youtube_connection_by_channel(self, user_id: str, channel_id: str) -> Optional[Dict[str, Any]]:
-        """Get YouTube connection by channel ID - delegates to Firestore for now."""
-        from services.firestore import firestore_service
-        return firestore_service.get_youtube_connection_by_channel(user_id, channel_id)
+    def get_youtube_connection_by_channel(self, user_id: str, youtube_channel_id: str) -> Optional[Dict[str, Any]]:
+        """Get YouTube connection by channel ID."""
+        try:
+            result = self.client.table('youtube_connections').select('*').eq('user_id', user_id).eq('youtube_channel_id', youtube_channel_id).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Error getting youtube connection for channel {youtube_channel_id}: {e}")
+            return None
 
     # ============================================================
-    # SUBSCRIPTIONS (Still in Firestore)
+    # SUBSCRIPTIONS
     # ============================================================
 
-    def create_subscription(self, *args, **kwargs) -> str:
-        """Create subscription - delegates to Firestore for now."""
-        from services.firestore import firestore_service
-        return firestore_service.create_subscription(*args, **kwargs)
+    def create_subscription(self, user_id: str, channel_id: str, callback_url: str,
+                           topic: str, lease_seconds: int, 
+                           expires_at: Optional[datetime] = None,
+                           secret: Optional[str] = None) -> str:
+        """Create PubSubHubbub subscription."""
+        subscription_id = str(uuid.uuid4())
+        data = {
+            'id': subscription_id,
+            'user_id': user_id,
+            'channel_id': channel_id,
+            'callback_url': callback_url,
+            'topic': topic,
+            'lease_seconds': lease_seconds,
+            'expires_at': expires_at.isoformat() if expires_at else None,
+            'secret': secret,
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        }
+        try:
+            self.client.table('subscriptions').insert(data).execute()
+            return subscription_id
+        except Exception as e:
+            print(f"Error creating subscription: {e}")
+            return ""
 
     def get_subscription(self, subscription_id: str) -> Optional[Dict[str, Any]]:
-        """Get subscription - delegates to Firestore for now."""
-        from services.firestore import firestore_service
-        return firestore_service.get_subscription(subscription_id)
+        """Get subscription by ID."""
+        try:
+            result = self.client.table('subscriptions').select('*').eq('id', subscription_id).single().execute()
+            return result.data if result.data else None
+        except Exception as e:
+            print(f"Error getting subscription {subscription_id}: {e}")
+            return None
 
     def get_subscription_by_channel(self, user_id: str, channel_id: str) -> Optional[Dict[str, Any]]:
-        """Get subscription by channel - delegates to Firestore for now."""
-        from services.firestore import firestore_service
-        return firestore_service.get_subscription_by_channel(user_id, channel_id)
+        """Get subscription by channel."""
+        try:
+            query = self.client.table('subscriptions').select('*').eq('channel_id', channel_id)
+            if user_id:
+                query = query.eq('user_id', user_id)
+            result = query.execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Error getting subscription for channel {channel_id}: {e}")
+            return None
 
     def delete_subscription(self, subscription_id: str) -> bool:
-        """Delete subscription - delegates to Firestore for now."""
-        from services.firestore import firestore_service
-        return firestore_service.delete_subscription(subscription_id)
+        """Delete subscription."""
+        try:
+            self.client.table('subscriptions').delete().eq('id', subscription_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error deleting subscription {subscription_id}: {e}")
+            return False
 
     # ============================================================
-    # OTHER METHODS (Still in Firestore)
+    # UPLOADED VIDEOS
     # ============================================================
 
-    def get_uploaded_videos(self, user_id: str, project_id: Optional[str], limit: int) -> List[Dict[str, Any]]:
-        """Get uploaded videos - delegates to Firestore for now."""
-        from services.firestore import firestore_service
-        return firestore_service.get_uploaded_videos(user_id, project_id, limit)
+    def get_uploaded_videos(self, user_id: str, project_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get uploaded videos for a user."""
+        try:
+            query = self.client.table('uploaded_videos').select('*').eq('user_id', user_id)
+            if project_id:
+                query = query.eq('project_id', project_id)
+            result = query.order('uploaded_at', desc=True).limit(limit).execute()
+            return result.data or []
+        except Exception as e:
+            print(f"Error getting uploaded videos: {e}")
+            return []
+
+    # ============================================================
+    # LOCALIZED VIDEOS (EXTRA)
+    # ============================================================
 
     def get_all_localized_videos_for_user(self, user_id: str) -> List[Dict[str, Any]]:
-        """Get all localized videos for user - delegates to Firestore for now."""
-        from services.firestore import firestore_service
-        return firestore_service.get_all_localized_videos_for_user(user_id)
+        """Get all localized videos for user."""
+        try:
+            result = self.client.table('localized_videos').select('*').eq('user_id', user_id).execute()
+            return result.data or []
+        except Exception as e:
+            print(f"Error getting all localized videos: {e}")
+            return []
 
     def get_localized_video_by_localized_id(self, video_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-        """Get localized video by ID - delegates to Firestore for now."""
-        from services.firestore import firestore_service
-        return firestore_service.get_localized_video_by_localized_id(video_id, user_id)
+        """Get localized video by YouTube video ID."""
+        try:
+            result = self.client.table('localized_videos').select('*').eq('user_id', user_id).eq('localized_video_id', video_id).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Error getting localized video by youtube id {video_id}: {e}")
+            return None
 
     def get_localized_videos_by_source_id(self, video_id: str, user_id: str) -> List[Dict[str, Any]]:
-        """Get localized videos by source ID - delegates to Firestore for now."""
-        from services.firestore import firestore_service
-        return firestore_service.get_localized_videos_by_source_id(video_id, user_id)
+        """Get localized videos by source ID."""
+        try:
+            result = self.client.table('localized_videos').select('*').eq('user_id', user_id).eq('source_video_id', video_id).execute()
+            return result.data or []
+        except Exception as e:
+            print(f"Error getting localized videos for source {video_id}: {e}")
+            return []
+
+    # ============================================================
+    # LANGUAGE CHANNELS
+    # ============================================================
 
     def update_language_channel(self, channel_id: str, user_id: str, **updates) -> bool:
-        """Update language channel - delegates to Firestore for now."""
-        from services.firestore import firestore_service
-        return firestore_service.update_language_channel(channel_id, user_id, **updates)
+        """Update language channel."""
+        try:
+            updates['updated_at'] = datetime.now(timezone.utc).isoformat()
+            self.client.table('channels').update(updates).eq('channel_id', channel_id).eq('user_id', user_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error updating language channel {channel_id}: {e}")
+            return False
 
     def delete_language_channel(self, channel_id: str, user_id: str) -> bool:
-        """Delete language channel - delegates to Firestore for now."""
-        from services.firestore import firestore_service
-        return firestore_service.delete_language_channel(channel_id, user_id)
+        """Delete language channel."""
+        try:
+            self.client.table('channels').delete().eq('channel_id', channel_id).eq('user_id', user_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error deleting language channel {channel_id}: {e}")
+            return False
 
-    def delete_project(self, project_id: str) -> bool:
-        """Delete project - delegates to Firestore for now."""
-        from services.firestore import firestore_service
-        return firestore_service.delete_project(project_id)
+    # ============================================================
+    # USER SETTINGS & USERS
+    # ============================================================
+
+    def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get user by ID."""
+        try:
+            result = self.client.table('users').select('*').eq('id', user_id).single().execute()
+            return result.data if result.data else None
+        except Exception as e:
+            print(f"Error getting user {user_id}: {e}")
+            return None
+
+    def create_or_update_user(self, user_id: str, email: Optional[str], 
+                              access_token: str, refresh_token: str,
+                              token_expiry: Optional[datetime] = None) -> Dict[str, Any]:
+        """Create or update user tokens."""
+        data = {
+            'id': user_id,
+            'email': email,
+            'access_token': access_token,
+            'refresh_token': refresh_token,
+            'token_expiry': token_expiry.isoformat() if token_expiry else None,
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        }
+        try:
+            result = self.client.table('users').upsert(data).execute()
+            return result.data[0] if result.data else {}
+        except Exception as e:
+            print(f"Error upserting user {user_id}: {e}")
+            return {}
+
+    def get_user_settings(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get user settings."""
+        try:
+            result = self.client.table('user_settings').select('*').eq('user_id', user_id).single().execute()
+            return result.data if result.data else None
+        except Exception as e:
+            print(f"Error getting user settings {user_id}: {e}")
+            return None
+
+    def update_user_settings(self, user_id: str, **updates):
+        """Update user settings."""
+        updates['user_id'] = user_id
+        updates['updated_at'] = datetime.now(timezone.utc).isoformat()
+        try:
+            self.client.table('user_settings').upsert(updates).execute()
+        except Exception as e:
+            print(f"Error updating user settings {user_id}: {e}")
+
+
+
+    # ============================================================
+    # TRANSCRIPTS
+    # ============================================================
+
+    def create_transcript(self, transcript_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new transcript."""
+        if 'created_at' not in transcript_data:
+            transcript_data['created_at'] = datetime.now(timezone.utc).isoformat()
+        if 'updated_at' not in transcript_data:
+            transcript_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+        
+        result = self.client.table('transcripts').insert(transcript_data).execute()
+        return result.data[0] if result.data else {}
+    
+    def get_transcript(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Get transcript for a job."""
+        try:
+            result = self.client.table('transcripts').select('*').eq('job_id', job_id).single().execute()
+            return result.data if result.data else None
+        except Exception as e:
+            print(f"Error getting transcript for job {job_id}: {e}")
+            return None
+
+    # ============================================================
+    # TRANSLATIONS
+    # ============================================================
+
+    def create_translation(self, translation_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new translation."""
+        if 'created_at' not in translation_data:
+            translation_data['created_at'] = datetime.now(timezone.utc).isoformat()
+        if 'updated_at' not in translation_data:
+            translation_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+        
+        result = self.client.table('translations').insert(translation_data).execute()
+        return result.data[0] if result.data else {}
+    
+    def get_translations(self, job_id: str) -> List[Dict[str, Any]]:
+        """Get all translations for a job."""
+        try:
+            result = self.client.table('translations').select('*').eq('job_id', job_id).execute()
+            return result.data or []
+        except Exception as e:
+            print(f"Error getting translations for job {job_id}: {e}")
+            return []
+    
+    def get_translation(self, job_id: str, target_language: str) -> Optional[Dict[str, Any]]:
+        """Get specific translation for a job and language."""
+        try:
+            result = self.client.table('translations').select('*')\
+                .eq('job_id', job_id)\
+                .eq('target_language', target_language)\
+                .single().execute()
+            return result.data if result.data else None
+        except Exception as e:
+            print(f"Error getting translation for job {job_id}, lang {target_language}: {e}")
+            return None
+
+    # ============================================================
+    # DUBBED AUDIO
+    # ============================================================
+
+    def create_dubbed_audio(self, audio_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new dubbed audio record."""
+        if 'created_at' not in audio_data:
+            audio_data['created_at'] = datetime.now(timezone.utc).isoformat()
+        if 'updated_at' not in audio_data:
+            audio_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+        
+        result = self.client.table('dubbed_audio').insert(audio_data).execute()
+        return result.data[0] if result.data else {}
+    
+    def get_dubbed_audio(self, job_id: str, language_code: str) -> Optional[Dict[str, Any]]:
+        """Get dubbed audio for a job and language."""
+        try:
+            result = self.client.table('dubbed_audio').select('*')\
+                .eq('job_id', job_id)\
+                .eq('language_code', language_code)\
+                .single().execute()
+            return result.data if result.data else None
+        except Exception as e:
+            print(f"Error getting dubbed audio for job {job_id}, lang {language_code}: {e}")
+            return None
+    
+    def get_all_dubbed_audio(self, job_id: str) -> List[Dict[str, Any]]:
+        """Get all dubbed audio files for a job."""
+        try:
+            result = self.client.table('dubbed_audio').select('*').eq('job_id', job_id).execute()
+            return result.data or []
+        except Exception as e:
+            print(f"Error getting dubbed audio for job {job_id}: {e}")
+            return []
+
+    # ============================================================
+    # LIP SYNC JOBS
+    # ============================================================
+
+    def create_lip_sync_job(self, lipsync_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new lip sync job record."""
+        if 'created_at' not in lipsync_data:
+            lipsync_data['created_at'] = datetime.now(timezone.utc).isoformat()
+        
+        result = self.client.table('lip_sync_jobs').insert(lipsync_data).execute()
+        return result.data[0] if result.data else {}
+    
+    def update_lip_sync_job(self, lipsync_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Update a lip sync job."""
+        result = self.client.table('lip_sync_jobs').update(updates)\
+            .eq('id', lipsync_id).execute()
+        return result.data[0] if result.data else {}
+    
+    def get_lip_sync_job(self, job_id: str, language_code: str) -> Optional[Dict[str, Any]]:
+        """Get lip sync job for a job and language."""
+        try:
+            result = self.client.table('lip_sync_jobs').select('*')\
+                .eq('job_id', job_id)\
+                .eq('language_code', language_code)\
+                .single().execute()
+            return result.data if result.data else None
+        except Exception as e:
+            print(f"Error getting lip sync job for {job_id}, lang {language_code}: {e}")
+            return None
+    
+    def get_all_lip_sync_jobs(self, job_id: str) -> List[Dict[str, Any]]:
+        """Get all lip sync jobs for a job."""
+        try:
+            result = self.client.table('lip_sync_jobs').select('*').eq('job_id', job_id).execute()
+            return result.data or []
+        except Exception as e:
+            print(f"Error getting lip sync jobs for job {job_id}: {e}")
+            return []
 
 
 # Create singleton instance

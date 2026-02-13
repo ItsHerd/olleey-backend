@@ -244,21 +244,53 @@ async def get_dashboard(
     one_week_ago = now - timedelta(days=7)
     
     try:
-        # Get user info from Firebase Auth
-        firebase_user = auth.get_user(user_id)
+        # User info from current_user (Supabase)
+        email = current_user.get("email")
+        name = current_user.get("name") or email.split("@")[0]
+        claims = current_user.get("claims", {})
         
+        # Extract metadata from claims
+        created_at_raw = claims.get("created_at")
+        if created_at_raw:
+            try:
+                # Supabase uses ISO format for created_at in JWT
+                created_at = datetime.fromisoformat(created_at_raw.replace('Z', '+00:00'))
+            except:
+                created_at = now
+        else:
+            # Fallback to iat (issued at) if created_at not present
+            iat = claims.get("iat")
+            created_at = datetime.fromtimestamp(iat) if iat else now
+            
+        auth_provider = "email"
+        # Supabase stores provider info in app_metadata
+        app_metadata = claims.get("app_metadata", {})
+        provider = app_metadata.get("provider")
+        if provider == "google":
+            auth_provider = "google"
+            
         # 1. YouTube Connections
         youtube_connections: List[YouTubeConnectionSummary] = []
         try:
             youtube_connections_data = supabase_service.get_youtube_connections(user_id)
             for conn in youtube_connections_data:
+                # Handle potential string timestamps from Supabase
+                connected_at_raw = conn.get('created_at', now)
+                if isinstance(connected_at_raw, str):
+                    try:
+                        connected_at = datetime.fromisoformat(connected_at_raw.replace('Z', '+00:00'))
+                    except:
+                        connected_at = now
+                else:
+                    connected_at = connected_at_raw
+
                 youtube_connections.append(
                     YouTubeConnectionSummary(
                         connection_id=conn.get('connection_id', ''),
                         youtube_channel_id=conn.get('youtube_channel_id', ''),
                         youtube_channel_name=conn.get('youtube_channel_name'),
                         is_primary=conn.get('is_primary', False),
-                        connected_at=conn.get('created_at', now),
+                        connected_at=connected_at,
                     )
                 )
         except Exception as e:
@@ -267,35 +299,50 @@ async def get_dashboard(
         # 2. Processing Jobs & Weekly Stats
         jobs_data, total_jobs = supabase_service.list_processing_jobs(user_id, project_id=project_id, limit=100)
         
-        active_jobs = sum(1 for job in jobs_data if job.get('status') in ['pending', 'downloading', 'processing', 'uploading', 'waiting_approval'])
+        active_jobs = sum(1 for job in jobs_data if job.get('status') in ['pending', 'downloading', 'processing', 'uploading', 'waiting_approval', 'queued'])
         completed_jobs = sum(1 for job in jobs_data if job.get('status') == 'completed')
         
         # Weekly Stats calculation
         videos_completed_this_week = 0
         for job in jobs_data:
             if job.get('status') == 'completed':
-                comp_at = job.get('completed_at', job.get('updated_at'))
-                if comp_at:
-                    if hasattr(comp_at, 'timestamp'):
-                        comp_at_dt = datetime.fromtimestamp(comp_at.timestamp())
+                comp_at_raw = job.get('completed_at', job.get('updated_at'))
+                if comp_at_raw:
+                    if isinstance(comp_at_raw, str):
+                        try:
+                            comp_at_dt = datetime.fromisoformat(comp_at_raw.replace('Z', '+00:00'))
+                        except:
+                            comp_at_dt = now
+                    elif hasattr(comp_at_raw, 'timestamp'):
+                        comp_at_dt = datetime.fromtimestamp(comp_at_raw.timestamp())
                     else:
-                        comp_at_dt = comp_at # assume it's already datetime or similar
+                        comp_at_dt = comp_at_raw
                     
-                    if isinstance(comp_at_dt, datetime) and comp_at_dt > one_week_ago:
+                    if isinstance(comp_at_dt, datetime) and comp_at_dt.replace(tzinfo=None) > one_week_ago:
                         videos_completed_this_week += 1
         
         recent_jobs = []
         # Return more jobs for demo users to show all data
         job_limit = 20 if len(jobs_data) > 10 else 5
         for job in jobs_data[:job_limit]:
+            # Parse created_at
+            created_at_job_raw = job.get('created_at', now)
+            if isinstance(created_at_job_raw, str):
+                try:
+                    created_at_job = datetime.fromisoformat(created_at_job_raw.replace('Z', '+00:00'))
+                except:
+                    created_at_job = now
+            else:
+                created_at_job = created_at_job_raw
+
             recent_jobs.append(
                 ProcessingJobSummary(
-                    job_id=job.get('job_id', ''),  # Fixed: use 'job_id' not 'id'
+                    job_id=job.get('job_id', ''),
                     source_video_id=job.get('source_video_id', ''),
                     status=job.get('status', 'pending'),
                     progress=job.get('progress', 0),
                     target_languages=job.get('target_languages', []),
-                    created_at=job.get('created_at', now),
+                    created_at=created_at_job,
                 )
             )
             
@@ -319,10 +366,20 @@ async def get_dashboard(
         try:
             projects_data = supabase_service.list_projects(user_id)
             for proj in projects_data:
+                # Parse created_at
+                created_at_proj_raw = proj.get('created_at', now)
+                if isinstance(created_at_proj_raw, str):
+                    try:
+                        created_at_proj = datetime.fromisoformat(created_at_proj_raw.replace('Z', '+00:00'))
+                    except:
+                        created_at_proj = now
+                else:
+                    created_at_proj = created_at_proj_raw
+
                 projects.append(ProjectSummary(
                     id=proj.get('id', ''),
                     name=proj.get('name', 'Untitled Project'),
-                    created_at=proj.get('created_at', now)
+                    created_at=created_at_proj
                 ))
         except Exception as e:
             print("[DASHBOARD_WARN] failed to load projects:", str(e))
@@ -332,15 +389,23 @@ async def get_dashboard(
         try:
             activity_data = supabase_service.list_activity_logs(user_id, project_id=project_id, limit=5)
             for log in activity_data:
-                ts = log.get('timestamp')
-                if hasattr(ts, 'timestamp'):
-                    ts = datetime.fromtimestamp(ts.timestamp())
+                ts_raw = log.get('timestamp')
+                if isinstance(ts_raw, str):
+                    try:
+                        ts = datetime.fromisoformat(ts_raw.replace('Z', '+00:00'))
+                    except:
+                        ts = now
+                elif hasattr(ts_raw, 'timestamp'):
+                    ts = datetime.fromtimestamp(ts_raw.timestamp())
+                else:
+                    ts = ts_raw or now
+
                 recent_activity.append(ActivityFeedItem(
                     id=log.get('id', 'unknown'),
                     action=log.get('action', 'Activity'),
                     details=log.get('details'),
                     status=log.get('status', 'info'),
-                    timestamp=ts or now,
+                    timestamp=ts,
                     project_id=log.get('project_id')
                 ))
         except Exception as e:
@@ -362,21 +427,14 @@ async def get_dashboard(
             growth_percentage=growth
         )
 
-        auth_provider = "email"
-        if firebase_user.provider_data:
-            for provider in firebase_user.provider_data:
-                if provider.provider_id == "google.com":
-                    auth_provider = "google"
-                    break
-
         print(f"[DASHBOARD] Returning data: projects={len(projects)}, videos={total_jobs}, jobs={total_jobs}, channels={len(language_channels)}")
 
         return DashboardResponse(
             user_id=user_id,
-            email=current_user.get("email") or firebase_user.email,
-            name=current_user.get("name") or firebase_user.display_name,
+            email=email,
+            name=name,
             auth_provider=auth_provider,
-            created_at=datetime.fromtimestamp(firebase_user.user_metadata.creation_timestamp / 1000),
+            created_at=created_at.replace(tzinfo=None),
             credits=credits,
             weekly_stats=weekly_stats,
             youtube_connections=youtube_connections,
@@ -394,6 +452,8 @@ async def get_dashboard(
         )
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"[DASHBOARD_ERROR] {str(e)}")
         # Partial fallback
         return DashboardResponse(

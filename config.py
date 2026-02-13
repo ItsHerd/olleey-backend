@@ -7,6 +7,12 @@ from typing import Optional
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
+    # Supabase Configuration
+    supabase_url: str = Field(..., env="SUPABASE_URL")
+    supabase_anon_key: str = Field(..., env="SUPABASE_ANON_KEY")
+    supabase_service_key: Optional[str] = Field(None, env="SUPABASE_SERVICE_KEY")
+    supabase_jwt_secret: Optional[str] = Field(None, env="SUPABASE_JWT_SECRET")
+
     # Google OAuth
     google_client_id: str
     google_client_secret: str
@@ -37,46 +43,14 @@ class Settings(BaseSettings):
     elevenlabs_api_key: Optional[str] = None
     elevenlabs_base_url: str = "https://api.elevenlabs.io/v1"
         
-    # Firebase/Firestore
-    # Production Credentials
-    firebase_project_id_prod: str = "vox-translate-b8c94"
-    firebase_credentials_path_prod: str = "./vox-translate-b8c94-firebase-adminsdk-fbsvc-7749166547.json"
-    firebase_web_api_key_prod: Optional[str] = None
-    firebase_web_api_key_generic: Optional[str] = Field(None, alias="firebase_web_api_key")
-
-    # Test Credentials
-    firebase_project_id_test: str = "olleey-test"
-    firebase_credentials_path_test: str = "./olleey-test-firebase-adminsdk-fbsvc-c807baae03.json"
-    firebase_web_api_key_test: Optional[str] = "AIzaSyBEi-QjTm_3uc5Zf2qaHfG2FkD1DhYGteE"
-
-    @property
-    def firebase_project_id(self) -> str:
-        """Get active project ID based on environment."""
-        if self.use_mock_db: # Fallback if flag is still true, though we removed implementation
-             return "mock-project"
-        if self.environment.lower() in ["test", "testing"]:
-            return self.firebase_project_id_test
-        return self.firebase_project_id_prod
-
-    @property
-    def firebase_credentials_path(self) -> str:
-        """Get active credentials path based on environment."""
-        if self.environment.lower() in ["test", "testing"]:
-            return self.firebase_credentials_path_test
-        return self.firebase_credentials_path_prod
-
-    @property
-    def firebase_web_api_key(self) -> Optional[str]:
-        """Get active Web API Key based on environment."""
-        # Prioritize the generic key from .env if it was explicitly set
-        if self.firebase_web_api_key_generic:
-            return self.firebase_web_api_key_generic
-            
-        if self.environment.lower() in ["test", "testing"]:
-            return self.firebase_web_api_key_test
-        return self.firebase_web_api_key_prod
-    
-    # Storage Configuration
+    # OAuth Scopes
+    use_mock_db: bool = False
+    youtube_scopes: list[str] = [
+        "https://www.googleapis.com/auth/youtube.upload",
+        "https://www.googleapis.com/auth/youtube.readonly",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile"
+    ]
     storage_type: str = "local"  # Options: "local" or "s3"
     local_storage_dir: str = "./storage"  # Directory for storing processed videos locally
     
@@ -104,9 +78,51 @@ class Settings(BaseSettings):
 
         @classmethod
         def parse_env_var(cls, field_name: str, raw_val: str):
-            if field_name in ["google_client_id", "google_client_secret", "google_redirect_uri", "firebase_web_api_key"]:
+            if field_name in ["google_client_id", "google_client_secret", "google_redirect_uri", "supabase_url", "supabase_anon_key", "supabase_jwt_secret"]:
                 return raw_val.strip()
             return raw_val
 
 
 settings = Settings()
+
+
+# Demo Video Library - Multiple pre-configured videos for demo user
+DEMO_VIDEO_LIBRARY = {
+    "video_001_yceo": {
+        "id": "demo_real_video_001",
+        "title": "The Nature of Startups with YC CEO",
+        "description": "In-depth discussion about the fundamental nature of startups",
+        "original_url": "https://olleey-videos.s3.us-west-1.amazonaws.com/en.mp4",
+        "thumbnail": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+        "duration": 180,
+        "languages": {
+            "es": {
+                "dubbed_video_url": "https://olleey-videos.s3.us-west-1.amazonaws.com/es.mov",
+                "dubbed_audio_url": "https://olleey-videos.s3.us-west-1.amazonaws.com/es.mp3",
+                "transcript": "Welcome to this discussion about the nature of startups...",
+                "translation": "Bienvenido a esta discusión sobre la naturaleza de las startups...",
+            },
+            # Add more languages as you create them (fr, de, etc.)
+        }
+    },
+    # Add more videos here as you expand demo library
+}
+
+# Pipeline timing configuration (in seconds) for demo simulation
+DEMO_PIPELINE_TIMING = {
+    "transcription": 5,
+    "translation": 3,
+    "dubbing": 8,
+    "lip_sync": 10,
+}
+
+
+def validate_demo_config():
+    """Validate demo video URLs on startup."""
+    if settings.environment == "development":
+        for video_key, video_data in DEMO_VIDEO_LIBRARY.items():
+            print(f"[CONFIG] Demo video: {video_data['id']} - {video_data['title']}")
+            langs = list(video_data.get('languages', {}).keys())
+            if langs:
+                print(f"  Languages available: {', '.join(langs)}")
+

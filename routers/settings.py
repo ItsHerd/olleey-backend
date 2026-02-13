@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional
 
-from services.firestore import firestore_service
+from services.supabase_db import supabase_service as firestore_service
 from schemas.settings import UserSettings, UpdateUserSettingsRequest, NotificationSettings
 from middleware.auth import get_current_user
 

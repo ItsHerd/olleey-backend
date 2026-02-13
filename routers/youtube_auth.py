@@ -6,7 +6,7 @@ from googleapiclient.discovery import build
 from fastapi import HTTPException
 
 from config import settings
-from services.firestore import firestore_service
+from services.supabase_db import supabase_service as firestore_service
 
 
 def get_youtube_credentials(user_id: str, connection_id: Optional[str] = None) -> Optional[Credentials]:

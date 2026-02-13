@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 import asyncio
 
-from services.firestore import firestore_service
+from services.supabase_db import supabase_service as firestore_service
 from config import settings
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])

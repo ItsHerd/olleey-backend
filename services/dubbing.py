@@ -8,12 +8,14 @@ from datetime import datetime
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-from services.firestore import firestore_service
+from services.supabase_db import supabase_service as firestore_service
 from services.notification import notification_service
 from services.video_download import download_video
 from services.synclabs import process_lip_sync, download_video_from_url
 from services.storage import get_storage_service
 from services.elevenlabs_service import elevenlabs_service
+from services.cost_tracking import get_cost_tracker
+from services.pipeline_tracking import PipelineTracker
 from routers.youtube_auth import get_youtube_service
 from config import settings
 
@@ -74,7 +76,23 @@ async def process_dubbing_job(job_id: str):
         
         # Get storage service
         storage_service = get_storage_service()
-        
+
+        # Calculate estimated costs
+        video_duration_minutes = video_info.get('duration', 180) / 60  # Convert seconds to minutes
+        cost_tracker_instance = get_cost_tracker(user_id)
+        cost_estimate = cost_tracker_instance.calculate_dubbing_cost(
+            video_duration_minutes=video_duration_minutes,
+            num_languages=len(job.get('target_languages', [])),
+            include_lipsync=True
+        )
+        print(f"[DUBBING] Estimated cost: ${cost_estimate['total']} ({len(job.get('target_languages', []))} languages)")
+
+        # Store cost estimate in job metadata
+        firestore_service.update_processing_job(job_id, {
+            'estimated_cost': cost_estimate['total'],
+            'cost_breakdown': cost_estimate
+        })
+
         # Step 2: Process for each target language
         target_languages = job.get('target_languages', [])
         total_languages = len(target_languages)
@@ -85,7 +103,7 @@ async def process_dubbing_job(job_id: str):
                 # Get localized audio using ElevenLabs
                 if settings.elevenlabs_api_key:
                     print(f"[DUBBING] usage ElevenLabs for {language_code}")
-                    
+
                     # Ensure public URL for source video
                     # We utilize the storage service to get a public URL for the video
                     # This might be redundant if we did it outside, but it ensures we have it
@@ -100,23 +118,50 @@ async def process_dubbing_job(job_id: str):
                         source_url=video_url_for_elevenlabs,
                         target_lang=language_code
                     )
-                    
+
                     print(f"[DUBBING] ElevenLabs task started: {dubbing_id}")
                     await elevenlabs_service.wait_for_completion(dubbing_id)
-                    
+
+                    # Get full metadata including transcript and translation
+                    dubbing_metadata = await elevenlabs_service.get_dubbing_metadata(dubbing_id)
+                    print(f"[DUBBING] Retrieved metadata for {language_code}")
+
+                    # Store transcript and translation in database
+                    tracker = PipelineTracker(user_id)
+
+                    # Store transcript (only once per job, for source language)
+                    if idx == 0:  # First language processed
+                        tracker.track_transcript(
+                            job_id=job_id,
+                            transcript_text=dubbing_metadata.get('transcript', ''),
+                            source_language=dubbing_metadata.get('source_language', 'auto'),
+                            confidence_score=1.0,
+                            word_timestamps=None  # ElevenLabs may provide this in metadata
+                        )
+                        print(f"[DUBBING] Stored transcript for job {job_id}")
+
+                    # Store translation for this target language
+                    tracker.track_translation(
+                        job_id=job_id,
+                        target_language=language_code,
+                        translated_text=dubbing_metadata.get('translation', ''),
+                        translation_engine='elevenlabs'
+                    )
+                    print(f"[DUBBING] Stored translation for {language_code}")
+
                     localized_audio_path = os.path.join(
-                        tempfile.gettempdir(), 
+                        tempfile.gettempdir(),
                         f'elevenlabs_audio_{job_id}_{language_code}.mp3'
                     )
                     await elevenlabs_service.download_dubbed_audio(
-                        dubbing_id, 
-                        language_code, 
+                        dubbing_id,
+                        language_code,
                         localized_audio_path
                     )
-                    
+
                     # Cleanup ElevenLabs project to save space/clutter
                     await elevenlabs_service.delete_dubbing_project(dubbing_id)
-                    
+
                 else:
                     # Fallback to original audio if no key provided
                     localized_audio_path = audio_path
@@ -158,22 +203,47 @@ async def process_dubbing_job(job_id: str):
                 # Since upload_video is specific to videos, we might want to check storage_service
                 # But for now we use what we have. If upload_video works for mp3, great.
                 dubbed_audio_url = storage_service.get_storage_url(audio_storage_path, base_url)
-                
+
+                # Track dubbed audio in database
+                if settings.elevenlabs_api_key:
+                    audio_file_size = os.path.getsize(localized_audio_path) if os.path.exists(localized_audio_path) else 0
+                    tracker.track_dubbed_audio(
+                        job_id=job_id,
+                        language_code=language_code,
+                        audio_url=dubbed_audio_url,
+                        audio_format='mp3',
+                        file_size_bytes=audio_file_size,
+                        duration_seconds=video_info.get('duration', 0)
+                    )
+                    print(f"[DUBBING] Tracked dubbed audio for {language_code}")
+
                 # Step 2b: Process with Sync Labs using public URLs
                 result = await process_lip_sync(
                     video_url=video_url_public,
                     audio_url=audio_url_public
                 )
-                
+
                 print(f"[DUBBING] Sync Labs result: {result}")
-                
+
+                # Track lip sync job in database
+                lipsync_job_id = tracker.track_lip_sync_job(
+                    job_id=job_id,
+                    language_code=language_code,
+                    synclabs_job_id=result.get('id', ''),
+                    video_url=video_url_public,
+                    audio_url=audio_url_public,
+                    status='completed',
+                    output_video_url=result.get('url', '')
+                )
+                print(f"[DUBBING] Tracked lip sync job for {language_code}")
+
                 # Step 2c: Download synced video from Sync Labs
                 synced_video_path = os.path.join(
-                    tempfile.gettempdir(), 
+                    tempfile.gettempdir(),
                     f'synced_{job_id}_{language_code}.mp4'
                 )
                 await download_video_from_url(result['url'], synced_video_path)
-                
+
                 print(f"[DUBBING] Downloaded synced video: {synced_video_path}")
                 
                 # Step 2d: Save processed video to permanent storage

@@ -54,15 +54,54 @@ class ElevenLabsService:
         Returns: 'dubbing', 'dubbed', 'failed'
         """
         url = f"{self.base_url}/dubbing/{dubbing_id}"
-        
+
         async with httpx.AsyncClient() as client:
             response = await client.get(url, headers=self.headers, timeout=10.0)
-            
+
             if response.status_code != 200:
                 raise Exception(f"Failed to get dubbing status: {response.text}")
-                
+
             data = response.json()
             return data["status"]
+
+    async def get_dubbing_metadata(self, dubbing_id: str) -> Dict[str, Any]:
+        """
+        Get full dubbing metadata including transcript, translations, and audio URLs.
+
+        Args:
+            dubbing_id: The dubbing project ID
+
+        Returns:
+            Dict containing:
+                - status: Current status
+                - source_language: Detected source language
+                - target_language: Target language code
+                - transcript: Original transcript text
+                - translation: Translated text
+                - dubbed_file_url: URL to dubbed audio file
+                - metadata: Additional metadata from ElevenLabs
+        """
+        url = f"{self.base_url}/dubbing/{dubbing_id}"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=self.headers, timeout=10.0)
+
+            if response.status_code != 200:
+                raise Exception(f"Failed to get dubbing metadata: {response.text}")
+
+            data = response.json()
+
+            # Extract key fields from ElevenLabs response
+            return {
+                'status': data.get('status'),
+                'dubbing_id': dubbing_id,
+                'source_language': data.get('source_language', 'auto'),
+                'target_language': data.get('target_language'),
+                'transcript': data.get('transcript', ''),
+                'translation': data.get('translation', ''),
+                'dubbed_file_url': data.get('dubbed_file_url'),
+                'metadata': data  # Store full response for reference
+            }
 
     async def wait_for_completion(self, dubbing_id: str, check_interval: int = 10, timeout: int = 1200) -> bool:
         """
@@ -135,8 +174,24 @@ if settings.environment == "test" or settings.use_mock_db:
         print(f"[MOCK] ElevenLabs delete_dubbing_project called for {dubbing_id}")
         pass
 
+    async def mock_get_dubbing_metadata(self, dubbing_id: str) -> Dict[str, Any]:
+        print(f"[MOCK] ElevenLabs get_dubbing_metadata called for {dubbing_id}")
+        # Extract target language from dubbing_id (format: mock_dubbing_id_{lang})
+        target_lang = dubbing_id.split('_')[-1] if '_' in dubbing_id else 'es'
+        return {
+            'status': 'dubbed',
+            'dubbing_id': dubbing_id,
+            'source_language': 'en',
+            'target_language': target_lang,
+            'transcript': 'This is a mock transcript of the source video content.',
+            'translation': f'This is a mock translation in {target_lang}.',
+            'dubbed_file_url': f'https://mock.elevenlabs.io/audio/{dubbing_id}.mp3',
+            'metadata': {'mock': True}
+        }
+
     ElevenLabsService.create_dubbing_task = mock_create_dubbing_task
     ElevenLabsService.get_dubbing_status = mock_get_dubbing_status
     ElevenLabsService.wait_for_completion = mock_wait_for_completion
     ElevenLabsService.download_dubbed_audio = mock_download_dubbed_audio
     ElevenLabsService.delete_dubbing_project = mock_delete_dubbing_project
+    ElevenLabsService.get_dubbing_metadata = mock_get_dubbing_metadata

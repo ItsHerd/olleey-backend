@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 from services.supabase_db import supabase_service
 from services.job_queue import enqueue_dubbing_job
 from services.demo_simulator import demo_simulator
+from services.job_statistics import job_statistics
 from schemas.jobs import CreateJobRequest, CreateManualJobRequest, ProcessingJobResponse, JobListResponse, LocalizedVideoResponse
 from middleware.auth import get_current_user
 
@@ -998,6 +999,115 @@ async def get_job_videos(
     return response
 
 
+@router.get("/{job_id}/transcript")
+async def get_job_transcript(
+    job_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get the source transcript for a job.
+
+    Returns the original transcript extracted from ElevenLabs dubbing.
+    """
+    user_id = current_user["user_id"]
+
+    # Verify job ownership
+    job = supabase_service.get_processing_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found"
+        )
+
+    if job.get('user_id') != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to access this job"
+        )
+
+    # Get transcript
+    transcript = supabase_service.get_transcript(job_id)
+
+    if not transcript:
+        raise HTTPException(
+            status_code=404,
+            detail="Transcript not found for this job"
+        )
+
+    return transcript
+
+
+@router.get("/{job_id}/translations")
+async def get_job_translations(
+    job_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get all translations for a job.
+
+    Returns translations for all target languages.
+    """
+    user_id = current_user["user_id"]
+
+    # Verify job ownership
+    job = supabase_service.get_processing_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found"
+        )
+
+    if job.get('user_id') != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to access this job"
+        )
+
+    # Get all translations
+    translations = supabase_service.get_translations(job_id)
+
+    return translations
+
+
+@router.get("/{job_id}/translations/{language_code}")
+async def get_job_translation(
+    job_id: str,
+    language_code: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get translation for a specific language.
+
+    Returns the translation for the specified target language.
+    """
+    user_id = current_user["user_id"]
+
+    # Verify job ownership
+    job = supabase_service.get_processing_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found"
+        )
+
+    if job.get('user_id') != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to access this job"
+        )
+
+    # Get specific translation
+    translation = supabase_service.get_translation(job_id, language_code)
+
+    if not translation:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Translation not found for language {language_code}"
+        )
+
+    return translation
+
+
 @router.patch("/{job_id}/videos/{language_code}")
 async def update_localized_video(
     job_id: str,
@@ -1236,3 +1346,257 @@ async def update_job_status(
         "job_id": job_id,
         "status": new_status
     }
+
+
+@router.get("/statistics/metrics")
+async def get_job_metrics(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get comprehensive job metrics and statistics.
+    
+    Returns metrics including:
+    - Total jobs by status
+    - Success rate
+    - Average processing time
+    - Language statistics
+    """
+    try:
+        user_id = current_user["user_id"]
+        
+        # Get all user jobs
+        jobs = supabase_service.get_user_processing_jobs(user_id)
+        
+        # Calculate metrics
+        metrics = job_statistics.calculate_job_metrics(jobs)
+        
+        return {
+            "success": True,
+            "metrics": metrics
+        }
+    except Exception as e:
+        logger.error(f"Failed to get job metrics: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/statistics/recent")
+async def get_recent_activity(
+    days: int = Query(7, ge=1, le=90),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get recent activity metrics for the specified period.
+    
+    Args:
+        days: Number of days to analyze (default: 7, max: 90)
+    """
+    try:
+        user_id = current_user["user_id"]
+        
+        # Get all user jobs
+        jobs = supabase_service.get_user_processing_jobs(user_id)
+        
+        # Get recent activity
+        activity = job_statistics.get_recent_activity(jobs, days=days)
+        
+        return {
+            "success": True,
+            "activity": activity
+        }
+    except Exception as e:
+        logger.error(f"Failed to get recent activity: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/statistics/errors")
+async def get_error_summary(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get summary of failed jobs and common errors.
+    
+    Useful for identifying and debugging recurring issues.
+    """
+    try:
+        user_id = current_user["user_id"]
+        
+        # Get all user jobs
+        jobs = supabase_service.get_user_processing_jobs(user_id)
+        
+        # Analyze errors
+        error_summary = job_statistics.get_error_summary(jobs)
+        
+        return {
+            "success": True,
+            "errors": error_summary
+        }
+    except Exception as e:
+        logger.error(f"Failed to get error summary: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/statistics/languages")
+async def get_language_statistics(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get statistics on language usage and popularity.
+    
+    Shows which languages are most commonly requested.
+    """
+    try:
+        user_id = current_user["user_id"]
+        
+        # Get all user jobs
+        jobs = supabase_service.get_user_processing_jobs(user_id)
+        
+        # Get language stats
+        lang_stats = job_statistics.get_language_popularity(jobs)
+        
+        return {
+            "success": True,
+            "languages": lang_stats
+        }
+    except Exception as e:
+        logger.error(f"Failed to get language statistics: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/statistics/insights")
+async def get_performance_insights(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get AI-generated insights and recommendations.
+    
+    Provides actionable insights based on job performance data.
+    """
+    try:
+        user_id = current_user["user_id"]
+        
+        # Get all user jobs
+        jobs = supabase_service.get_user_processing_jobs(user_id)
+        
+        # Generate insights
+        insights = job_statistics.get_performance_insights(jobs)
+        
+        return {
+            "success": True,
+            "insights": insights
+        }
+    except Exception as e:
+        logger.error(f"Failed to get performance insights: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/{job_id}/transcript")
+async def update_job_transcript(
+    job_id: str,
+    transcript_text: str = Body(..., embed=True),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Update the source transcript text for a job.
+
+    Allows users to edit and correct transcription errors in the review interface.
+    """
+    user_id = current_user["user_id"]
+
+    # Verify job ownership
+    job = supabase_service.get_processing_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found"
+        )
+
+    if job.get('user_id') != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to access this job"
+        )
+
+    # Get the transcript
+    transcript = supabase_service.get_transcript(job_id)
+    if not transcript:
+        raise HTTPException(
+            status_code=404,
+            detail="Transcript not found for this job"
+        )
+
+    try:
+        # Update the transcript text
+        supabase_service.client.table("transcripts").update({
+            "transcript_text": transcript_text,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("job_id", job_id).execute()
+
+        logger.info(f"Updated transcript for job {job_id}")
+
+        return {
+            "success": True,
+            "message": "Transcript updated successfully"
+        }
+    except Exception as e:
+        logger.error(f"Failed to update transcript for job {job_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update transcript: {str(e)}"
+        )
+
+
+@router.patch("/{job_id}/translations/{language_code}")
+async def update_job_translation(
+    job_id: str,
+    language_code: str,
+    translated_text: str = Body(..., embed=True),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Update the translation text for a specific language.
+
+    Allows users to edit and improve translations in the review interface.
+    """
+    user_id = current_user["user_id"]
+
+    # Verify job ownership
+    job = supabase_service.get_processing_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found"
+        )
+
+    if job.get('user_id') != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to access this job"
+        )
+
+    # Get the translation
+    translation = supabase_service.get_translation(job_id, language_code)
+    if not translation:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Translation not found for language {language_code}"
+        )
+
+    try:
+        # Update the translation text
+        supabase_service.client.table("translations").update({
+            "translated_text": translated_text,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("job_id", job_id).eq("target_language", language_code).execute()
+
+        logger.info(f"Updated translation for job {job_id}, language {language_code}")
+
+        return {
+            "success": True,
+            "message": "Translation updated successfully"
+        }
+    except Exception as e:
+        logger.error(f"Failed to update translation for job {job_id}, language {language_code}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update translation: {str(e)}"
+        )

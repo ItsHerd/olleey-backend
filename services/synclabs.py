@@ -30,7 +30,9 @@ async def process_lip_sync(
     video_url: str,
     audio_url: str,
     sync_mode: str = "loop",
-    model: str = "lipsync-2"
+    model: str = "lipsync-2",
+    user_id: Optional[str] = None,
+    language: Optional[str] = None
 ) -> dict:
     """
     Complete lip-sync workflow using official Sync Labs SDK.
@@ -40,6 +42,8 @@ async def process_lip_sync(
         audio_url: Publicly accessible URL to the dubbed audio
         sync_mode: Sync mode - "loop" (recommended) or "direct"
         model: Model to use - "lipsync-2" (latest) or "lipsync-1"
+        user_id: Optional user ID for demo mode check
+        language: Optional language code for demo video lookup
         
     Returns:
         dict: Generation response with video URL and metadata
@@ -103,17 +107,60 @@ async def process_lip_sync(
         print(f"[SYNC_LABS] ❌ Error: {str(e)}")
         raise
 
-# Mocking for test environment
+# Mocking for test environment and demo users
 if settings.environment == "test" or settings.use_mock_db:
-    async def mock_process_lip_sync(video_url: str, audio_url: str, sync_mode: str = "loop", model: str = "lipsync-2") -> dict:
+    async def mock_process_lip_sync(
+        video_url: str, 
+        audio_url: str, 
+        sync_mode: str = "loop", 
+        model: str = "lipsync-2",
+        user_id: Optional[str] = None,
+        language: Optional[str] = None
+    ) -> dict:
+        """Enhanced mock using demo video library."""
+        import uuid
+        from services.demo_simulator import demo_simulator
+        from config import DEMO_VIDEO_LIBRARY, DEMO_PIPELINE_TIMING
+        
         print(f"[MOCK] Sync Labs process_lip_sync called")
         print(f"  Video: {video_url}")
         print(f"  Audio: {audio_url}")
+        print(f"  Language: {language}")
         
-        # Return a mock result immediately
+        # Check if demo user
+        if user_id and demo_simulator.is_demo_user(user_id):
+            # Simulate processing delay
+            await asyncio.sleep(DEMO_PIPELINE_TIMING.get("lip_sync", 10))
+            
+            # Look up in demo library
+            for video_data in DEMO_VIDEO_LIBRARY.values():
+                if video_url in video_data.get("original_url", ""):
+                    if language and language in video_data.get("languages", {}):
+                        dubbed_url = video_data["languages"][language].get("dubbed_video_url")
+                        if dubbed_url:
+                            print(f"[MOCK] ✅ Found dubbed video for {language}: {dubbed_url}")
+                            return {
+                                "id": f"demo_sync_{uuid.uuid4().hex[:8]}",
+                                "url": dubbed_url,
+                                "status": "COMPLETED",
+                                "model": model,
+                                "is_demo": True
+                            }
+            
+            # Fallback to original if no mapping found
+            print(f"[MOCK] ⚠ No dubbed video found, returning original")
+            return {
+                "id": f"demo_sync_{uuid.uuid4().hex[:8]}",
+                "url": video_url,
+                "status": "COMPLETED",
+                "model": model,
+                "is_demo": True
+            }
+        
+        # Non-demo mock (basic test mode)
         return {
             "id": "mock_sync_id_12345",
-            "url": video_url, # Return original video as result for testing
+            "url": video_url,
             "status": "COMPLETED",
             "model": model
         }

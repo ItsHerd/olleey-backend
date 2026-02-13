@@ -1,63 +1,62 @@
 """Authentication middleware for Firebase Auth token verification."""
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from firebase_admin import auth
 from typing import Optional
+from jose import jwt, JWTError
+from config import settings
+from services.supabase_db import supabase_service
 
 security = HTTPBearer()
 
 
-async def verify_firebase_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+async def verify_supabase_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """
-    Verify Firebase ID token and return user info.
-    
-    Args:
-        credentials: HTTP Bearer token credentials
-        
-    Returns:
-        dict: User information from Firebase token
-        
-    Raises:
-        HTTPException: If token is invalid or expired
+    Verify Supabase ID token and return user info.
     """
     token = credentials.credentials
     
     try:
-        if token == "mock-token":
-            return {
-                "user_id": "5TEUt0AICGcrKAum7LJauZJcODq1",
-                "email": "test@example.com",
-                "name": "Test User",
-                "email_verified": True,
-                "firebase_claims": {}
-            }
+        # 1. Try local verification if secret is available
+        if settings.supabase_jwt_secret:
+            try:
+                payload = jwt.decode(
+                    token, 
+                    settings.supabase_jwt_secret, 
+                    algorithms=["HS256"],
+                    options={"verify_aud": False}
+                )
+                return {
+                    "user_id": payload.get("sub"),
+                    "email": payload.get("email"),
+                    "name": payload.get("user_metadata", {}).get("name"),
+                    "claims": payload
+                }
+            except JWTError as e:
+                print(f"[AUTH] Local JWT verification failed: {e}")
+                # Fallback to Supabase API check
 
-        # Verify the token with Firebase Admin SDK
-        decoded_token = auth.verify_id_token(token)
-        
-        # Extract user information
-        user_info = {
-            "user_id": decoded_token["uid"],
-            "email": decoded_token.get("email"),
-            "name": decoded_token.get("name"),
-            "email_verified": decoded_token.get("email_verified", False),
-            "firebase_claims": decoded_token
-        }
-        
-        return user_info
-        
-    except auth.InvalidIdTokenError:
+        # 2. Fallback to Supabase API verification
+        # This is slower but works even without JWT_SECRET
+        try:
+            # We set the current session to verify token
+            user_response = supabase_service.client.auth.get_user(token)
+            if user_response.user:
+                user = user_response.user
+                return {
+                    "user_id": user.id,
+                    "email": user.email,
+                    "name": user.user_metadata.get("name"),
+                    "claims": user.dict()
+                }
+        except Exception as e:
+            print(f"[AUTH] Supabase API verification failed: {e}")
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    except auth.ExpiredIdTokenError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -67,7 +66,7 @@ async def verify_firebase_token(credentials: HTTPAuthorizationCredentials = Depe
 
 
 # Dependency for getting current user
-async def get_current_user(user: dict = Depends(verify_firebase_token)) -> dict:
+async def get_current_user(user: dict = Depends(verify_supabase_token)) -> dict:
     """
     Get current authenticated user from Firebase token.
     
@@ -95,6 +94,6 @@ async def get_optional_user(
         return None
     
     try:
-        return await verify_firebase_token(credentials)
+        return await verify_supabase_token(credentials)
     except HTTPException:
         return None
