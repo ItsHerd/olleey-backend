@@ -1,312 +1,234 @@
 # Data Schema Documentation
 
-This document outlines the complete data schema for the YouTube Dubbing Platform, including all collections, fields, and relationships stored in Firebase Firestore.
+This document describes the active **Supabase/PostgreSQL** schema used by the backend and dashboard.
 
----
+## Source of truth
 
-## 📊 Collections Overview
+- Runtime schema: Supabase project
+- Migration files:
+  - `migrations/001_add_dubbing_pipeline_fields.sql`
+  - `migrations/002_create_dubbing_detail_tables.sql`
+- Context dump (may lag): `olleey-web/db.sql`
 
-The platform uses the following Firestore collections:
-1. **users** - User authentication and OAuth tokens
-2. **subscriptions** - PubSubHubbub channel subscriptions
-3. **processing_jobs** - Video dubbing/processing jobs
-4. **language_channels** - Language-specific YouTube channels
-5. **localized_videos** - Processed and published localized videos
+## Core tables
 
----
+### `users`
+Stores application user metadata and OAuth tokens.
 
-## 1. Users Collection
+Key columns:
+- `id` (uuid, primary key)
+- `user_id` (text, unique, required)
+- `email` (text, unique, required)
+- `name`, `avatar_url`
+- `access_token`, `refresh_token`, `token_expiry`
+- `preferences` (jsonb), `is_active`
+- `created_at`, `updated_at`
 
-**Purpose**: Store user authentication credentials and OAuth tokens
+Notes:
+- In app auth flow, `user_id` is expected to match Supabase auth `uid` string.
 
-**Document ID**: `{user_id}` (Google user ID)
+### `projects`
+Logical workspace grouping for channels, videos, and jobs.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `user_id` | string | ✅ | Google user ID (document ID) |
-| `email` | string | ❌ | User's email address |
-| `access_token` | string | ✅ | OAuth 2.0 access token |
-| `refresh_token` | string | ✅ | OAuth 2.0 refresh token |
-| `token_expiry` | timestamp | ❌ | Access token expiration time |
-| `created_at` | timestamp | ✅ | Account creation timestamp |
-| `updated_at` | timestamp | ✅ | Last update timestamp |
+Key columns:
+- `id` (uuid, primary key)
+- `user_id` (text, required)
+- `name` (required), `description`, `settings` (jsonb)
+- `created_at`, `updated_at`, `deleted_at`
 
-**Example**:
-```json
-{
-  "user_id": "12345678901234567890",
-  "email": "user@example.com",
-  "access_token": "ya29.a0AfH6SMC...",
-  "refresh_token": "1//0gX...",
-  "token_expiry": "2026-01-19T00:00:00Z",
-  "created_at": "2026-01-18T12:00:00Z",
-  "updated_at": "2026-01-18T16:30:00Z"
-}
-```
+### `channels`
+Language-aware publishing channels linked to a project.
 
----
+Key columns:
+- `id` (uuid, primary key)
+- `channel_id` (text, unique)
+- `user_id` (text, required)
+- `project_id` (uuid, FK -> `projects.id`)
+- `channel_name`
+- `language_code`, `language_name`
+- `is_master`, `master_channel_id`
+- `thumbnail_url`, `subscriber_count`, `video_count`
+- `is_paused`, `deleted_at`, timestamps
 
-## 2. Subscriptions Collection
+### `youtube_connections`
+OAuth-level channel connection records used by distribution logic.
 
-**Purpose**: Track PubSubHubbub subscriptions for YouTube channel notifications
+Key columns:
+- `connection_id` (uuid/text key, used by backend as unique identifier)
+- `user_id`
+- `youtube_channel_id`, `youtube_channel_name`
+- `channel_avatar_url`
+- `access_token`, `refresh_token`, `token_expiry`
+- `is_primary`
+- `language_code`
+- `master_connection_id` (self-reference for satellite/master structure)
+- `connection_type` (`master`, `satellite`, etc.)
+- timestamps
 
-**Document ID**: `{subscription_id}` (UUID)
+Notes:
+- Dashboard “Active Distributions” and channels API logic read from this table.
+- This table is required for current seed + dashboard connection flow.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | ✅ | Subscription ID (document ID) |
-| `user_id` | string | ✅ | Owner user ID |
-| `channel_id` | string | ✅ | YouTube channel ID being monitored |
-| `callback_url` | string | ✅ | Webhook callback URL |
-| `topic` | string | ✅ | PubSubHubbub topic URL |
-| `lease_seconds` | integer | ✅ | Subscription lease duration (seconds) |
-| `expires_at` | timestamp | ❌ | Subscription expiration time |
-| `secret` | string | ❌ | Optional subscription secret |
-| `created_at` | timestamp | ✅ | Subscription creation time |
-| `updated_at` | timestamp | ✅ | Last update timestamp |
+### `videos`
+Source video library records.
 
-**Example**:
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "user_id": "12345678901234567890",
-  "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxx",
-  "callback_url": "http://localhost:8000/webhooks/youtube",
-  "topic": "https://www.youtube.com/xml/feeds/videos.xml?channel_id=UCxxxxxxxxxxxxxxxxxxxxxx",
-  "lease_seconds": 2592000,
-  "expires_at": "2026-02-17T12:00:00Z",
-  "created_at": "2026-01-18T12:00:00Z",
-  "updated_at": "2026-01-18T12:00:00Z"
-}
-```
+Key columns:
+- `id` (uuid, primary key)
+- `video_id` (text, unique business key)
+- `user_id` (text, required)
+- `project_id` (uuid, FK)
+- `channel_id`, `channel_name`
+- `title`, `description`, `thumbnail_url`
+- `storage_url`, `video_url`
+- `duration`, `view_count`, `like_count`, `comment_count`
+- `status`, `language_code`, `video_type`, `source_video_id`
+- `published_at`, `deleted_at`, timestamps
 
----
+### `processing_jobs`
+Pipeline job records for localization flow.
 
-## 3. Processing Jobs Collection
+Key columns:
+- `id` (uuid, primary key)
+- `job_id` (uuid, unique business key)
+- `user_id` (text, required)
+- `project_id` (uuid, FK)
+- `source_video_id`, `source_channel_id`
+- `target_languages` (array/json)
+- `status`, `progress`, `error_message`
+- `workflow_state` (jsonb)
+- `started_at`, `completed_at`, `deleted_at`, timestamps
 
-**Purpose**: Track video dubbing/processing pipeline jobs
+Migration-added pipeline columns:
+- `elevenlabs_job_id`
+- `source_language`
+- `estimated_cost`, `actual_cost`
+- `cost_breakdown` (jsonb)
+- `current_stage`
+- `dubbing_metadata` (jsonb)
+- `processing_time_seconds`
 
-**Document ID**: `{job_id}` (UUID)
+### `localized_videos`
+Per-language outputs for a processing job.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | ✅ | Job ID (document ID) |
-| `user_id` | string | ✅ | Owner user ID |
-| `source_video_id` | string | ✅ | Original YouTube video ID |
-| `source_channel_id` | string | ✅ | Source YouTube channel ID |
-| `target_languages` | array[string] | ✅ | List of target language codes (ISO 639-1) |
-| `status` | string | ✅ | Job status: `pending`, `downloading`, `processing`, `uploading`, `completed`, `failed` |
-| `progress` | integer | ✅ | Progress percentage (0-100) |
-| `error_message` | string | ❌ | Error message if job failed |
-| `created_at` | timestamp | ✅ | Job creation timestamp |
-| `updated_at` | timestamp | ✅ | Last update timestamp |
-| `completed_at` | timestamp | ❌ | Job completion timestamp |
+Key columns:
+- `id` (uuid, primary key)
+- `job_id` (uuid, FK -> `processing_jobs.id`)
+- `source_video_id` (text)
+- `user_id`, `project_id`, `channel_id`
+- `language_code`
+- `localized_video_id` (published platform ID)
+- `title`, `description`
+- `video_url`, `storage_url`, `thumbnail_url`
+- `status`, `duration`, timestamps
 
-**Status Values**:
-- `pending` - Job created, waiting to start
-- `downloading` - Downloading source video from YouTube
-- `processing` - Processing video (lip-sync, dubbing, etc.)
-- `uploading` - Uploading processed videos to YouTube
-- `completed` - All localized videos published successfully
-- `failed` - Job failed with error
+Migration-added linkage columns:
+- `transcript_id` (FK -> `transcripts.id`)
+- `translation_id` (FK -> `translations.id`)
+- `dubbed_audio_id` (FK -> `dubbed_audio.id`)
+- `lip_sync_job_id` (FK -> `lip_sync_jobs.id`)
+- `dubbed_audio_url`
 
-**Example**:
-```json
-{
-  "id": "660e8400-e29b-41d4-a716-446655440001",
-  "user_id": "12345678901234567890",
-  "source_video_id": "dQw4w9WgXcQ",
-  "source_channel_id": "UCxxxxxxxxxxxxxxxxxxxxxx",
-  "target_languages": ["es", "fr", "de"],
-  "status": "processing",
-  "progress": 45,
-  "error_message": null,
-  "created_at": "2026-01-18T14:00:00Z",
-  "updated_at": "2026-01-18T14:15:00Z",
-  "completed_at": null
-}
-```
+### `subscriptions`
+PubSubHubbub subscription tracking.
 
----
+Key columns:
+- `id` (uuid, primary key)
+- `user_id`, `channel_id`
+- `callback_url`, `topic`
+- `lease_seconds`, `expires_at`
+- `secret`, `status`, `last_verified_at`, `renewal_attempts`
+- timestamps
 
-## 4. Language Channels Collection
+## Pipeline detail tables (migration 002)
 
-**Purpose**: Map language codes to YouTube channels for publishing localized content
+### `transcripts`
+Transcript artifacts per job.
 
-**Document ID**: `{channel_doc_id}` (UUID)
+Key columns:
+- `id` (uuid)
+- `job_id` (FK -> `processing_jobs.id`)
+- `video_id`, `user_id`
+- `language_code`
+- `transcript_text`, `word_timestamps` (jsonb)
+- `provider`, `confidence_score`, `duration`, `status`
+- timestamps
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | ✅ | Language channel record ID (document ID) |
-| `user_id` | string | ✅ | Owner user ID |
-| `channel_id` | string | ✅ | YouTube channel ID |
-| `language_code` | string | ✅ | ISO 639-1 language code (e.g., "es", "fr", "de") |
-| `channel_name` | string | ❌ | Human-readable channel name |
-| `created_at` | timestamp | ✅ | Record creation timestamp |
-| `updated_at` | timestamp | ✅ | Last update timestamp |
+### `translations`
+Translations per job + target language.
 
-**Example**:
-```json
-{
-  "id": "770e8400-e29b-41d4-a716-446655440002",
-  "user_id": "12345678901234567890",
-  "channel_id": "UCyyyyyyyyyyyyyyyyyyyy",
-  "language_code": "es",
-  "channel_name": "Spanish Dubbing Channel",
-  "created_at": "2026-01-18T10:00:00Z",
-  "updated_at": "2026-01-18T10:00:00Z"
-}
-```
+Key columns:
+- `id` (uuid)
+- `transcript_id` (FK -> `transcripts.id`)
+- `job_id` (FK -> `processing_jobs.id`)
+- `video_id`, `user_id`
+- `source_language`, `target_language`
+- `translated_text`, `word_timestamps` (jsonb)
+- `provider`, `confidence_score`, `status`, `reviewed`
+- timestamps
 
----
+### `dubbed_audio`
+Generated audio records per job + language.
 
-## 5. Localized Videos Collection
+Key columns:
+- `id` (uuid)
+- `translation_id` (FK -> `translations.id`)
+- `job_id` (FK -> `processing_jobs.id`)
+- `language_code`, `user_id`
+- `audio_url`, `duration`, `file_size`, `format`
+- `voice_id`, `voice_name`, `voice_settings` (jsonb), `segments` (jsonb)
+- `provider`, `status`, timestamps
 
-**Purpose**: Track processed and published localized video versions
+### `lip_sync_jobs`
+Lip-sync execution tracking per job + language.
 
-**Document ID**: `{localized_video_id}` (UUID)
+Key columns:
+- `id` (uuid)
+- `job_id` (FK -> `processing_jobs.id`)
+- `dubbed_audio_id` (FK -> `dubbed_audio.id`)
+- `language_code`, `user_id`
+- `synclabs_job_id`, `status`, `progress`
+- `input_video_url`, `input_audio_url`, `output_video_url`
+- `quality_score`, `processing_time_seconds`, `cost`
+- `created_at`, `completed_at`
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | ✅ | Localized video record ID (document ID) |
-| `job_id` | string | ✅ | Parent processing job ID |
-| `source_video_id` | string | ✅ | Original YouTube video ID |
-| `localized_video_id` | string | ❌ | YouTube video ID of published localized version |
-| `language_code` | string | ✅ | ISO 639-1 language code |
-| `channel_id` | string | ✅ | Target YouTube channel ID |
-| `status` | string | ✅ | Video status: `pending`, `processing`, `uploaded`, `published`, `failed` |
-| `storage_url` | string | ❌ | URL to processed video file (local storage path) |
-| `created_at` | timestamp | ✅ | Record creation timestamp |
-| `updated_at` | timestamp | ✅ | Last update timestamp |
+## Optional/support tables used by services
 
-**Status Values**:
-- `pending` - Waiting to be processed
-- `processing` - Currently being processed (lip-sync, dubbing)
-- `uploaded` - Uploaded to YouTube but not yet published
-- `published` - Successfully published to YouTube channel
-- `failed` - Processing or upload failed
+### `activity_logs`
+If present, used by `supabase_db.log_activity` and dashboard activity list.
 
-**Example**:
-```json
-{
-  "id": "880e8400-e29b-41d4-a716-446655440003",
-  "job_id": "660e8400-e29b-41d4-a716-446655440001",
-  "source_video_id": "dQw4w9WgXcQ",
-  "localized_video_id": "aBcDeFgHiJk",
-  "language_code": "es",
-  "channel_id": "UCyyyyyyyyyyyyyyyyyyyy",
-  "status": "published",
-  "storage_url": "/storage/videos/12345678901234567890/660e8400-e29b-41d4-a716-446655440001/es/aBcDeFgHiJk.mp4",
-  "created_at": "2026-01-18T14:05:00Z",
-  "updated_at": "2026-01-18T14:20:00Z"
-}
-```
+Expected columns:
+- `id`, `user_id`, `project_id`, `action`, `status`, `details`, `timestamp`
 
----
+### `user_settings`
+Read/write helper table for user preferences.
 
-## 🔗 Relationships
+Expected columns:
+- `user_id`, settings payload fields, `updated_at`
 
-### Job → Localized Videos
-- One `processing_job` can have multiple `localized_videos` (one per target language)
-- Relationship: `localized_videos.job_id` → `processing_jobs.id`
+## Relationship summary
 
-### User → All Collections
-- All collections are scoped to a `user_id`
-- Users can have multiple:
-  - Subscriptions (monitoring multiple channels)
-  - Processing jobs (processing multiple videos)
-  - Language channels (publishing to multiple channels)
-  - Localized videos (through jobs)
+- `projects.user_id` -> logical owner
+- `channels.project_id` -> `projects.id`
+- `videos.project_id` -> `projects.id`
+- `processing_jobs.project_id` -> `projects.id`
+- `localized_videos.job_id` -> `processing_jobs.id`
+- `transcripts.job_id` -> `processing_jobs.id`
+- `translations.job_id` -> `processing_jobs.id`
+- `dubbed_audio.job_id` -> `processing_jobs.id`
+- `lip_sync_jobs.job_id` -> `processing_jobs.id`
+- `youtube_connections.master_connection_id` -> `youtube_connections.connection_id`
 
-### Channel → Language Channel
-- `language_channels.channel_id` references a YouTube channel
-- One language channel per `(user_id, language_code)` combination
+## Status lifecycle (current app behavior)
 
-### Source Video → Processing Job
-- `processing_jobs.source_video_id` references the original YouTube video
-- One job per source video (but can process multiple languages)
+Processing jobs commonly flow through:
+- `pending` -> `downloading` -> `transcribing` -> `translating` -> `dubbing` -> `syncing` -> `uploading` -> `waiting_approval`/`completed`
+- failure path: `failed`
 
----
+Localized videos commonly use:
+- `processing` / `draft` / `live` / `failed`
 
-## 📝 Data Flow Example
+## Operational notes
 
-### Complete Workflow:
-
-1. **User subscribes to channel** → Creates `subscription` record
-2. **New video uploaded to YouTube** → PubSubHubbub webhook triggers
-3. **System creates processing job** → Creates `processing_job` with:
-   - `source_video_id`: Original video ID
-   - `target_languages`: ["es", "fr", "de"]
-   - `status`: "pending"
-4. **Job processing starts** → Updates `processing_job.status` to "downloading" → "processing"
-5. **For each target language**:
-   - Creates `localized_video` record with `status: "pending"`
-   - Processes video (lip-sync, dubbing)
-   - Updates `localized_video.status` to "processing" → "uploaded"
-   - Uploads to YouTube channel from `language_channels`
-   - Updates `localized_video.status` to "published" and sets `localized_video_id`
-6. **Job completes** → Updates `processing_job.status` to "completed"
-
----
-
-## 🎯 Key Queries
-
-### Get all jobs for a user:
-```python
-processing_jobs.where('user_id', '==', user_id)
-```
-
-### Get all localized videos for a job:
-```python
-localized_videos.where('job_id', '==', job_id)
-```
-
-### Get language channel for a language:
-```python
-language_channels.where('user_id', '==', user_id).where('language_code', '==', 'es')
-```
-
-### Get all published videos in a language:
-```python
-localized_videos.where('language_code', '==', 'es').where('status', '==', 'published')
-```
-
----
-
-## 📊 Summary Table
-
-| Collection | Primary Key | Key Relationships | Main Purpose |
-|------------|-------------|-------------------|--------------|
-| **users** | `user_id` | → All collections | Authentication |
-| **subscriptions** | `subscription_id` | → `users.user_id` | Channel monitoring |
-| **processing_jobs** | `job_id` | → `users.user_id`, `source_video_id` | Job tracking |
-| **language_channels** | `id` | → `users.user_id`, `channel_id` | Language→Channel mapping |
-| **localized_videos** | `id` | → `job_id`, `source_video_id`, `channel_id` | Published video tracking |
-
----
-
-## 🔄 Status Lifecycle
-
-### Processing Job Status Flow:
-```
-pending → downloading → processing → uploading → completed
-                                         ↓
-                                      failed
-```
-
-### Localized Video Status Flow:
-```
-pending → processing → uploaded → published
-            ↓
-         failed
-```
-
----
-
-## 📌 Notes
-
-- All timestamps use Firestore `SERVER_TIMESTAMP` for consistency
-- Language codes follow ISO 639-1 standard (2-letter codes)
-- Video IDs are YouTube video IDs (11 characters)
-- Channel IDs are YouTube channel IDs (24 characters, starting with "UC")
-- Storage URLs are relative paths from the storage root directory
+- Auth-scoped frontend queries depend on `user_id` matching logged-in Supabase auth UID.
+- Seed scripts should target real auth UID to make dashboard data visible immediately.
+- RLS policies on `users` and content tables must permit expected app/seed operations.

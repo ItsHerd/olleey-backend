@@ -449,7 +449,7 @@ async def youtube_connection_callback(
             # Get YouTube channel information
             youtube_service = build('youtube', 'v3', credentials=credentials)
             channels_response = youtube_service.channels().list(
-                part='snippet',
+                part='snippet,statistics',
                 mine=True
             ).execute()
             
@@ -464,6 +464,9 @@ async def youtube_connection_callback(
             channel = channels_response['items'][0]
             youtube_channel_id = channel['id']
             youtube_channel_name = channel['snippet'].get('title')
+            channel_stats = channel.get('statistics', {}) or {}
+            subscriber_count = int(channel_stats.get('subscriberCount', 0) or 0)
+            video_count = int(channel_stats.get('videoCount', 0) or 0)
             
             # Extract channel avatar (use high quality if available)
             thumbnails = channel['snippet'].get('thumbnails', {})
@@ -575,6 +578,44 @@ async def youtube_connection_callback(
                             action="Created project",
                             details="Default Project created automatically during YouTube connection."
                         )
+
+                # Ensure connected channel is represented in `channels` table so
+                # frontend channel selectors (which query `channels`) include it.
+                projects = firestore_service.list_projects(user_id)
+                target_project_id = projects[0].get('id') if projects else None
+
+                existing_language_channels = firestore_service.get_language_channels(user_id)
+                existing_language_channel = next(
+                    (ch for ch in existing_language_channels if ch.get('channel_id') == youtube_channel_id),
+                    None
+                )
+
+                channel_updates = {
+                    'channel_name': youtube_channel_name,
+                    'thumbnail_url': channel_avatar_url,
+                    'subscriber_count': subscriber_count,
+                    'video_count': video_count,
+                    'project_id': target_project_id,
+                    'is_master': True,
+                    'language_code': existing_language_channel.get('language_code') if existing_language_channel else 'en',
+                    'language_name': existing_language_channel.get('language_name') if existing_language_channel else 'English',
+                }
+
+                if existing_language_channel:
+                    firestore_service.update_channel(youtube_channel_id, channel_updates)
+                else:
+                    firestore_service.create_channel({
+                        'user_id': user_id,
+                        'channel_id': youtube_channel_id,
+                        'project_id': target_project_id,
+                        'channel_name': youtube_channel_name,
+                        'thumbnail_url': channel_avatar_url,
+                        'subscriber_count': subscriber_count,
+                        'video_count': video_count,
+                        'is_master': True,
+                        'language_code': 'en',
+                        'language_name': 'English',
+                    })
             
             # Redirect to frontend with success message
             # Get frontend URL from settings or use default

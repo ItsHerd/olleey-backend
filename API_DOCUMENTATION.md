@@ -606,6 +606,22 @@ Response: 200 OK
 }
 ```
 
+### Approve and Start Job Processing
+```http
+POST /jobs/{job_id}/approve-start
+Authorization: Bearer <token>
+
+Response: 200 OK
+{
+  "status": "started",
+  "message": "Job approved and processing started"
+}
+```
+
+Notes:
+- Use `POST /jobs/{job_id}/approve-start` for pre-processing approval-gated jobs (`status=waiting_approval`, `progress=0`).
+- Use `POST /jobs/{job_id}/approve` for post-processing publish approval.
+
 ### Approve Localized Videos
 ```http
 POST /jobs/{job_id}/videos/approve
@@ -903,11 +919,15 @@ Content-Type: application/json
 
 Response: 200 OK
 {
-  "success": true,
-  "message": "Subscribed to channel",
-  "subscription_id": "uuid"
+  "subscription_id": "uuid",
+  "channel_id": "UC...",
+  "expires_at": "2026-03-14T12:00:00Z",
+  "message": "Subscription created successfully. Awaiting verification from PubSubHubbub hub."
 }
 ```
+
+Notes:
+- Backend generates and stores a per-subscription `hub.secret` for webhook signature verification.
 
 ### Unsubscribe from Channel
 ```http
@@ -925,6 +945,28 @@ Response: 200 OK
   "message": "Unsubscribed from channel"
 }
 ```
+
+### Renew Due Subscriptions
+```http
+POST /videos/subscriptions/renew?renew_before_hours=168
+Authorization: Bearer <token>
+
+Response: 200 OK
+{
+  "status": "ok",
+  "scanned": 8,
+  "due": 3,
+  "renewed": 3,
+  "failed": 0
+}
+```
+
+Operational notes:
+- For background automation, you can run `python3 scripts/renew_subscriptions.py` on a daily cron.
+- Optional in-process scheduler env flags:
+  - `ENABLE_SUBSCRIPTION_RENEWAL_SCHEDULER=true`
+  - `SUBSCRIPTION_RENEWAL_INTERVAL_MINUTES=1440`
+  - `SUBSCRIPTION_RENEW_BEFORE_HOURS=168`
 
 ---
 
@@ -1187,11 +1229,24 @@ Response: 200 OK
 ```http
 POST /webhooks/youtube
 Content-Type: application/atom+xml
+X-Hub-Signature-256: sha256=<hmac_digest>   # when subscription secret is configured
 
 <feed>...</feed>
 
 Response: 200 OK
+{
+  "status": "received",
+  "videos_processed": 1,
+  "jobs_created": 1
+}
 ```
+
+Notes:
+- New upload detection is webhook-only (no scheduled polling fallback).
+- For each new upload, the backend prefetches metadata (`title`, `description`, `thumbnail_url`, `published_at`, optional stats) and upserts into `videos`.
+- Job creation is idempotent per `(user_id, source_video_id)`.
+- If user setting `auto_approve_jobs=false`, detected jobs are created in `waiting_approval` and do not start processing until explicitly started.
+- If a webhook signature is invalid and the subscription has a secret, endpoint returns `401`.
 
 ---
 
@@ -1300,6 +1355,7 @@ Response: 200 OK
 {
   "theme": "dark",
   "timezone": "America/Los_Angeles",
+  "auto_approve_jobs": false,
   "notifications": {
     "email_notifications": true,
     "distribution_updates": true,
@@ -1316,6 +1372,7 @@ Content-Type: application/json
 
 {
   "theme": "light",
+  "auto_approve_jobs": true,
   "notifications": {
     "email_notifications": false
   }
@@ -1325,6 +1382,7 @@ Response: 200 OK
 {
   "theme": "light",
   "timezone": "America/Los_Angeles",
+  "auto_approve_jobs": true,
   "notifications": {
     "email_notifications": false,
     "distribution_updates": true,

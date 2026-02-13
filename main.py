@@ -4,15 +4,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+import asyncio
 import os
 
 from config import settings
 from routers import auth, videos, localization, webhooks, channels, jobs, youtube_connect, dashboard, settings as settings_router, events, projects, costs
+from services.subscription_renewal import renewal_scheduler_loop, stop_scheduler_task
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize services on startup."""
+    renewal_task = None
+
     # Initialize local storage directory
     storage_dir = getattr(settings, 'local_storage_dir', './storage')
     os.makedirs(storage_dir, exist_ok=True)
@@ -21,8 +25,24 @@ async def lifespan(app: FastAPI):
     # Validate demo configuration
     from config import validate_demo_config
     validate_demo_config()
+
+    # Optional background scheduler for subscription lease renewal.
+    if settings.enable_subscription_renewal_scheduler:
+        renewal_task = asyncio.create_task(
+            renewal_scheduler_loop(
+                interval_minutes=settings.subscription_renewal_interval_minutes,
+                renew_before_hours=settings.subscription_renew_before_hours,
+            )
+        )
+        print(
+            "[SUB_RENEWAL] scheduler started "
+            f"(interval={settings.subscription_renewal_interval_minutes}m, "
+            f"renew_before={settings.subscription_renew_before_hours}h)"
+        )
     
     yield
+
+    await stop_scheduler_task(renewal_task)
 
 
 app = FastAPI(

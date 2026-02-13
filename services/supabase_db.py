@@ -73,6 +73,14 @@ class SupabaseService:
         result = self.client.table('videos').insert(video_data).execute()
         return result.data[0] if result.data else {}
 
+    def upsert_video(self, video_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Upsert a video by unique constraints (video_id)."""
+        if 'created_at' not in video_data:
+            video_data['created_at'] = datetime.now(timezone.utc).isoformat()
+        video_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+        result = self.client.table('videos').upsert(video_data).execute()
+        return result.data[0] if result.data else {}
+
     def update_video(self, video_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         """Update a video."""
         updates['updated_at'] = datetime.now(timezone.utc).isoformat()
@@ -124,6 +132,23 @@ class SupabaseService:
 
         result = query.execute()
         return result.data or [], result.count or 0
+
+    def get_job_by_video(self, source_video_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get a processing job for a source video + user."""
+        try:
+            result = (
+                self.client.table('processing_jobs')
+                .select('*')
+                .eq('source_video_id', source_video_id)
+                .eq('user_id', user_id)
+                .order('created_at', desc=True)
+                .limit(1)
+                .execute()
+            )
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Error getting job by video {source_video_id}: {e}")
+            return None
 
     def create_processing_job(self, job_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new processing job."""
@@ -415,6 +440,77 @@ class SupabaseService:
             print(f"Error getting youtube connection for channel {youtube_channel_id}: {e}")
             return None
 
+    def get_primary_youtube_connection(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get user's primary YouTube connection."""
+        try:
+            result = (
+                self.client.table('youtube_connections')
+                .select('*')
+                .eq('user_id', user_id)
+                .eq('is_primary', True)
+                .limit(1)
+                .execute()
+            )
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Error getting primary youtube connection for {user_id}: {e}")
+            return None
+
+    def update_youtube_connection(self, connection_id: str, **updates) -> bool:
+        """Update YouTube connection fields."""
+        updates['updated_at'] = datetime.now(timezone.utc).isoformat()
+        if 'token_expiry' in updates and isinstance(updates['token_expiry'], datetime):
+            updates['token_expiry'] = updates['token_expiry'].isoformat()
+        try:
+            self.client.table('youtube_connections').update(updates).eq('connection_id', connection_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error updating youtube connection {connection_id}: {e}")
+            return False
+
+    def set_primary_connection(self, connection_id: str, user_id: str) -> bool:
+        """Set one connection as primary and unset others."""
+        target = self.get_youtube_connection(connection_id, user_id)
+        if not target:
+            return False
+        try:
+            # Unset all existing primaries for this user.
+            self.client.table('youtube_connections').update({
+                'is_primary': False,
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }).eq('user_id', user_id).eq('is_primary', True).execute()
+            # Set requested connection as primary.
+            self.client.table('youtube_connections').update({
+                'is_primary': True,
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }).eq('connection_id', connection_id).eq('user_id', user_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error setting primary youtube connection {connection_id}: {e}")
+            return False
+
+    def delete_youtube_connection(self, connection_id: str, user_id: str) -> bool:
+        """Delete a YouTube connection owned by user."""
+        try:
+            self.client.table('youtube_connections').delete().eq('connection_id', connection_id).eq('user_id', user_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error deleting youtube connection {connection_id}: {e}")
+            return False
+
+    def get_youtube_credentials(self, user_id: str, connection_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Get OAuth credentials from specific or primary YouTube connection."""
+        connection = self.get_youtube_connection(connection_id, user_id) if connection_id else self.get_primary_youtube_connection(user_id)
+        if not connection:
+            return None
+        return {
+            'access_token': connection.get('access_token'),
+            'refresh_token': connection.get('refresh_token'),
+            'token_expiry': connection.get('token_expiry'),
+            'youtube_channel_id': connection.get('youtube_channel_id'),
+            'connection_id': connection.get('connection_id'),
+        }
+
     # ============================================================
     # SUBSCRIPTIONS
     # ============================================================
@@ -464,6 +560,72 @@ class SupabaseService:
         except Exception as e:
             print(f"Error getting subscription for channel {channel_id}: {e}")
             return None
+
+    def get_subscription_by_topic(self, topic: str) -> Optional[Dict[str, Any]]:
+        """Get subscription by topic URL."""
+        try:
+            result = self.client.table('subscriptions').select('*').eq('topic', topic).limit(1).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Error getting subscription by topic: {e}")
+            return None
+
+    def list_subscriptions(self, user_id: Optional[str] = None, limit: int = 1000) -> List[Dict[str, Any]]:
+        """List subscriptions, optionally scoped to a user."""
+        try:
+            query = self.client.table('subscriptions').select('*')
+            if user_id:
+                query = query.eq('user_id', user_id)
+            result = query.limit(limit).execute()
+            return result.data or []
+        except Exception as e:
+            print(f"Error listing subscriptions: {e}")
+            return []
+
+    def update_subscription_lease(self, subscription_id: str, expires_at: datetime, lease_seconds: int) -> bool:
+        """Update subscription lease metadata."""
+        try:
+            self.client.table('subscriptions').update({
+                'expires_at': expires_at.isoformat(),
+                'lease_seconds': lease_seconds,
+                'last_verified_at': datetime.now(timezone.utc).isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat(),
+                'status': 'active',
+            }).eq('id', subscription_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error updating subscription lease {subscription_id}: {e}")
+            return False
+
+    def update_subscription_status(
+        self,
+        subscription_id: str,
+        status: str,
+        renewal_attempts: Optional[int] = None,
+        error: Optional[str] = None,
+    ) -> bool:
+        """Update subscription status and renewal metadata."""
+        payload: Dict[str, Any] = {
+            "status": status,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if renewal_attempts is not None:
+            payload["renewal_attempts"] = renewal_attempts
+        if error is not None:
+            payload["last_error"] = error
+        try:
+            self.client.table('subscriptions').update(payload).eq('id', subscription_id).execute()
+            return True
+        except Exception:
+            # Some deployments may not have optional status columns yet.
+            try:
+                self.client.table('subscriptions').update({
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }).eq('id', subscription_id).execute()
+                return True
+            except Exception as e:
+                print(f"Error updating subscription status {subscription_id}: {e}")
+                return False
 
     def delete_subscription(self, subscription_id: str) -> bool:
         """Delete subscription."""

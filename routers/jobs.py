@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from services.supabase_db import supabase_service
-from services.job_queue import enqueue_dubbing_job
+from services.job_queue import enqueue_dubbing_job, start_existing_job_processing
 from services.demo_simulator import demo_simulator
 from services.job_statistics import job_statistics
 from schemas.jobs import CreateJobRequest, CreateManualJobRequest, ProcessingJobResponse, JobListResponse, LocalizedVideoResponse
@@ -675,6 +675,68 @@ async def approve_job(
     )
 
     return {"status": "approved", "message": "Job approved for publishing"}
+
+
+@router.post("/{job_id}/approve-start")
+async def approve_job_start(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Approve a newly detected job and start processing.
+
+    This is the pre-processing approval gate for webhook-detected jobs created with
+    `waiting_approval` + `progress=0`.
+    """
+    user_id = current_user["user_id"]
+    job = supabase_service.get_processing_job(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this job")
+    if job.get("status") != "waiting_approval":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is in state '{job.get('status')}', expected 'waiting_approval'",
+        )
+
+    # Distinguish pre-start waiting approval from post-processing review state.
+    if (job.get("progress") or 0) > 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Job is already processed and awaiting publish approval. Use /jobs/{job_id}/approve instead.",
+        )
+
+    supabase_service.update_processing_job(job_id, {
+        "status": "pending",
+        "current_stage": "queued",
+        "workflow_state": {
+            "review": {
+                "status": "approved_manual",
+                "approved_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    })
+
+    await start_existing_job_processing(
+        job_id=job_id,
+        source_video_id=job.get("source_video_id"),
+        user_id=user_id,
+        target_languages=job.get("target_languages", []),
+        is_simulation=bool(job.get("is_simulation", False)),
+        background_tasks=background_tasks,
+    )
+
+    supabase_service.log_activity(
+        user_id=user_id,
+        project_id=job.get("project_id"),
+        action="Approved job start",
+        details=f"Job {job_id} approved and started from pre-processing review gate.",
+    )
+
+    return {"status": "started", "message": "Job approved and processing started"}
 
 
 @router.post("/{job_id}/videos/approve")

@@ -31,6 +31,7 @@ async def get_user_settings(
         return UserSettings(
             theme="dark",
             timezone="America/Los_Angeles",
+            auto_approve_jobs=False,
             notifications=NotificationSettings(
                 email_notifications=True,
                 distribution_updates=True,
@@ -48,6 +49,7 @@ async def get_user_settings(
     return UserSettings(
         theme=settings.get('theme', 'dark'),
         timezone=settings.get('timezone', 'America/Los_Angeles'),
+        auto_approve_jobs=bool(settings.get('auto_approve_jobs', False)),
         notifications=notifications
     )
 
@@ -84,6 +86,9 @@ async def update_user_settings(
     
     if request.notifications is not None:
         updates['notifications'] = request.notifications.dict()
+
+    if request.auto_approve_jobs is not None:
+        updates['auto_approve_jobs'] = request.auto_approve_jobs
     
     if not updates:
         raise HTTPException(
@@ -107,5 +112,6 @@ async def update_user_settings(
     return UserSettings(
         theme=updated_settings.get('theme', 'dark') if updated_settings else 'dark',
         timezone=updated_settings.get('timezone', 'America/Los_Angeles') if updated_settings else 'America/Los_Angeles',
+        auto_approve_jobs=bool(updated_settings.get('auto_approve_jobs', False)) if updated_settings else False,
         notifications=notifications
     )

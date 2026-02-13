@@ -89,3 +89,37 @@ To Connect to Prod environment from local
 1. comment out test env variables and make prod accessbile in backend.
 2. in front end leave NEXT_PUBLIC_API_URL to point to local
 3. change the cloud key to point to prod
+
+## Webhook Subscription Operations
+
+- Ensure `WEBHOOK_BASE_URL` is set to a public HTTPS URL reachable by YouTube hub callbacks.
+- Subscriptions are created with `hub.secret`; webhook notifications are signature-verified when secret exists.
+
+### Renewing subscriptions
+
+Run this periodically (recommended daily) to renew leases before expiry:
+
+```bash
+python3 scripts/renew_subscriptions.py --renew-before-hours 168
+```
+
+Optional authenticated API trigger for one user:
+
+```http
+POST /videos/subscriptions/renew?renew_before_hours=168
+Authorization: Bearer <token>
+```
+
+### Optional built-in renewal scheduler
+
+You can run automatic renewal inside the FastAPI process by adding these env vars:
+
+```bash
+ENABLE_SUBSCRIPTION_RENEWAL_SCHEDULER=true
+SUBSCRIPTION_RENEWAL_INTERVAL_MINUTES=1440
+SUBSCRIPTION_RENEW_BEFORE_HOURS=168
+```
+
+Production recommendation:
+- Prefer external cron (calling `scripts/renew_subscriptions.py`) for stricter operational control.
+- Use the built-in scheduler only when single-instance behavior is acceptable.

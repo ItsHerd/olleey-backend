@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # PubSubHubbub
     webhook_base_url: Optional[str] = None  # Base URL for webhook callbacks
     pubsubhubbub_hub_url: str = "https://pubsubhubbub.appspot.com/subscribe"
+    enable_subscription_renewal_scheduler: bool = False
+    subscription_renewal_interval_minutes: int = 1440  # default: daily
+    subscription_renew_before_hours: int = 168  # default: 7 days
     
     # Frontend URL for OAuth redirects
     frontend_url: Optional[str] = None  # Frontend URL for OAuth callbacks (defaults to http://localhost:3000 in code)

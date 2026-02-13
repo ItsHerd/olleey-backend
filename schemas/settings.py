@@ -15,12 +15,14 @@ class UserSettings(BaseModel):
     theme: str = "dark"  # "light" or "dark"
     timezone: str = "America/Los_Angeles"  # IANA timezone
     notifications: NotificationSettings = NotificationSettings()  # Default notification settings
+    auto_approve_jobs: bool = False
     
     class Config:
         json_schema_extra = {
             "example": {
                 "theme": "dark",
                 "timezone": "America/Los_Angeles",
+                "auto_approve_jobs": False,
                 "notifications": {
                     "email_notifications": True,
                     "distribution_updates": True,
@@ -35,12 +37,14 @@ class UpdateUserSettingsRequest(BaseModel):
     theme: Optional[str] = None  # "light" or "dark"
     timezone: Optional[str] = None  # IANA timezone
     notifications: Optional[NotificationSettings] = None
+    auto_approve_jobs: Optional[bool] = None
     
     class Config:
         json_schema_extra = {
             "example": {
                 "theme": "light",
                 "timezone": "America/New_York",
+                "auto_approve_jobs": True,
                 "notifications": {
                     "email_notifications": False,
                     "distribution_updates": True,

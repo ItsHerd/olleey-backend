@@ -16,6 +16,7 @@ import traceback
 from datetime import datetime, timedelta
 
 from services.supabase_db import supabase_service
+from services.subscription_renewal import renew_due_subscriptions
 from schemas.videos import (
     VideoListResponse, VideoItem, VideoUploadRequest, VideoUploadResponse,
     SubscriptionRequest, SubscriptionResponse, UnsubscribeRequest, LocalizationStatus
@@ -876,13 +877,15 @@ async def subscribe_to_channel(
         
         # Build topic URL
         topic = f"https://www.youtube.com/xml/feeds/videos.xml?channel_id={request.channel_id}"
+        secret = uuid.uuid4().hex
         
         # Prepare subscription request to PubSubHubbub hub
         subscribe_data = {
             'hub.mode': 'subscribe',
             'hub.topic': topic,
             'hub.callback': callback_url,
-            'hub.lease_seconds': str(request.lease_seconds)
+            'hub.lease_seconds': str(request.lease_seconds),
+            'hub.secret': secret,
         }
         
         # Send subscription request to PubSubHubbub hub
@@ -904,7 +907,8 @@ async def subscribe_to_channel(
             callback_url=callback_url,
             topic=topic,
             lease_seconds=request.lease_seconds,
-            expires_at=expires_at
+            expires_at=expires_at,
+            secret=secret,
         )
         
         return SubscriptionResponse(
@@ -1016,4 +1020,28 @@ async def unsubscribe_from_channel(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to unsubscribe: {str(e)}"
+        )
+
+
+@router.post("/subscriptions/renew")
+async def renew_subscriptions(
+    renew_before_hours: int = 168,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Renew user's subscriptions that are expiring soon.
+
+    Intended to be callable by UI or cron-backed job runners.
+    """
+    user_id = current_user["user_id"]
+    try:
+        summary = await renew_due_subscriptions(
+            user_id=user_id,
+            renew_before_hours=renew_before_hours,
+        )
+        return {"status": "ok", **summary}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to renew subscriptions: {str(e)}",
         )
