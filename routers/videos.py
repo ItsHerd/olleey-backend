@@ -832,6 +832,151 @@ async def upload_video(
                 pass  # Ignore cleanup errors
 
 
+@router.post("/detected/sync-recent")
+async def sync_recent_detected_uploads(
+    days: int = 7,
+    per_channel_limit: int = 20,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Backfill recent uploads from connected YouTube channels into detected uploads.
+
+    This is useful after connecting a new channel that already has recent videos.
+    """
+    user_id = current_user["user_id"]
+    days = max(1, min(days, 31))
+    per_channel_limit = max(1, min(per_channel_limit, 50))
+
+    connections = supabase_service.get_youtube_connections(user_id)
+    if not connections:
+        return {
+            "status": "ok",
+            "channels_scanned": 0,
+            "videos_seen": 0,
+            "videos_upserted": 0,
+            "jobs_created": 0,
+            "message": "No connected channels found.",
+        }
+
+    language_channels = supabase_service.get_language_channels(user_id)
+    target_languages = sorted({ch.get("language_code") for ch in language_channels if ch.get("language_code")})
+    if not target_languages:
+        return {
+            "status": "ok",
+            "channels_scanned": len(connections),
+            "videos_seen": 0,
+            "videos_upserted": 0,
+            "jobs_created": 0,
+            "message": "No target languages configured.",
+        }
+
+    default_project_id = next((ch.get("project_id") for ch in language_channels if ch.get("project_id")), None)
+
+    from services.job_queue import enqueue_dubbing_job
+
+    published_after = (datetime.utcnow() - timedelta(days=days)).replace(microsecond=0).isoformat() + "Z"
+
+    seen_video_ids = set()
+    channels_scanned = 0
+    videos_seen = 0
+    videos_upserted = 0
+    jobs_created = 0
+
+    for conn in connections:
+        connection_id = conn.get("connection_id")
+        channel_id = conn.get("youtube_channel_id")
+        if not channel_id:
+            continue
+
+        youtube = await asyncio.to_thread(get_youtube_service_helper, user_id, connection_id, False)
+        if not youtube:
+            continue
+
+        channels_scanned += 1
+        try:
+            req = youtube.search().list(
+                part="id,snippet",
+                channelId=channel_id,
+                type="video",
+                order="date",
+                publishedAfter=published_after,
+                maxResults=per_channel_limit,
+            )
+            response = await asyncio.to_thread(req.execute)
+        except Exception:
+            continue
+
+        for item in response.get("items", []):
+            video_id = (item.get("id") or {}).get("videoId")
+            if not video_id or video_id in seen_video_ids:
+                continue
+            seen_video_ids.add(video_id)
+            videos_seen += 1
+
+            existing_job = supabase_service.get_job_by_video(video_id, user_id)
+            if existing_job:
+                continue
+
+            snippet = item.get("snippet", {})
+            thumbs = snippet.get("thumbnails", {}) or {}
+            thumb = (
+                thumbs.get("high")
+                or thumbs.get("medium")
+                or thumbs.get("default")
+                or {}
+            )
+
+            supabase_service.upsert_video({
+                "video_id": video_id,
+                "source_video_id": video_id,
+                "user_id": user_id,
+                "project_id": default_project_id,
+                "channel_id": channel_id,
+                "channel_name": snippet.get("channelTitle"),
+                "title": snippet.get("title") or f"Video {video_id}",
+                "description": snippet.get("description") or "",
+                "thumbnail_url": thumb.get("url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+                "published_at": snippet.get("publishedAt"),
+                "status": "detected",
+                "video_type": "youtube",
+            })
+            videos_upserted += 1
+
+            # Backfilled uploads should enter pre-start approval queue.
+            await enqueue_dubbing_job(
+                source_video_id=video_id,
+                source_channel_id=channel_id,
+                user_id=user_id,
+                target_languages=target_languages,
+                project_id=default_project_id,
+                auto_approve=False,
+                metadata={
+                    "detected_via": "manual_backfill_sync",
+                    "published_at": snippet.get("publishedAt"),
+                    "title": snippet.get("title"),
+                },
+                db=None,
+                background_tasks=None,
+            )
+            jobs_created += 1
+
+    supabase_service.log_activity(
+        user_id=user_id,
+        project_id=default_project_id,
+        action="Backfilled detected uploads",
+        details=f"Scanned {channels_scanned} channels. Seen {videos_seen} videos. Created {jobs_created} jobs.",
+    )
+
+    return {
+        "status": "ok",
+        "channels_scanned": channels_scanned,
+        "videos_seen": videos_seen,
+        "videos_upserted": videos_upserted,
+        "jobs_created": jobs_created,
+        "window_days": days,
+    }
+
+
 @router.post("/subscribe", response_model=SubscriptionResponse)
 async def subscribe_to_channel(
     request: SubscriptionRequest,

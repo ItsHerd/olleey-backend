@@ -127,11 +127,65 @@ async def get_dashboard_connections(
     """
     user_id = current_user["user_id"]
     connections = supabase_service.get_youtube_connections(user_id)
+    subscriptions = supabase_service.list_subscriptions(user_id=user_id, limit=1000)
+
+    def parse_dt(raw):
+        if not raw:
+            return None
+        if isinstance(raw, datetime):
+            return raw
+        if isinstance(raw, str):
+            try:
+                return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except Exception:
+                return None
+        return None
+
+    # Keep the newest subscription per channel (by expires_at, then updated_at).
+    subs_by_channel = {}
+    for sub in subscriptions:
+        channel_id = sub.get("channel_id")
+        if not channel_id:
+            continue
+
+        current = subs_by_channel.get(channel_id)
+        candidate_ts = parse_dt(sub.get("expires_at")) or parse_dt(sub.get("updated_at")) or datetime.min
+        current_ts = (
+            parse_dt(current.get("expires_at")) or parse_dt(current.get("updated_at")) or datetime.min
+            if current else datetime.min
+        )
+        if not current or candidate_ts >= current_ts:
+            subs_by_channel[channel_id] = sub
+
+    now = datetime.utcnow()
+    enriched_connections = []
+    for conn in connections:
+        connection = dict(conn)
+        channel_id = connection.get("youtube_channel_id") or connection.get("channel_id")
+        sub = subs_by_channel.get(channel_id) if channel_id else None
+
+        if sub:
+            expires_at_raw = sub.get("expires_at")
+            expires_at = parse_dt(expires_at_raw)
+            webhook_expired = bool(expires_at and expires_at.replace(tzinfo=None) < now)
+            connection["webhook_subscription_id"] = sub.get("id")
+            connection["webhook_expires_at"] = expires_at_raw
+            connection["webhook_expired"] = webhook_expired
+            connection["webhook_subscription_status"] = (
+                "expired" if webhook_expired else (sub.get("status") or "active")
+            )
+        else:
+            connection["webhook_subscription_id"] = None
+            connection["webhook_expires_at"] = None
+            connection["webhook_expired"] = False
+            connection["webhook_subscription_status"] = "missing"
+
+        enriched_connections.append(connection)
 
     return {
-        "connections": connections,
-        "total": len(connections),
-        "has_connection": len(connections) > 0
+        "connections": enriched_connections,
+        "total": len(enriched_connections),
+        "has_connection": len(enriched_connections) > 0
     }
 
 

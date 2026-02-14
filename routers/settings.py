@@ -32,6 +32,7 @@ async def get_user_settings(
             theme="dark",
             timezone="America/Los_Angeles",
             auto_approve_jobs=False,
+            detected_upload_window="last_7_days",
             notifications=NotificationSettings(
                 email_notifications=True,
                 distribution_updates=True,
@@ -50,6 +51,7 @@ async def get_user_settings(
         theme=settings.get('theme', 'dark'),
         timezone=settings.get('timezone', 'America/Los_Angeles'),
         auto_approve_jobs=bool(settings.get('auto_approve_jobs', False)),
+        detected_upload_window=settings.get('detected_upload_window', 'last_7_days'),
         notifications=notifications
     )
 
@@ -90,6 +92,15 @@ async def update_user_settings(
     if request.auto_approve_jobs is not None:
         updates['auto_approve_jobs'] = request.auto_approve_jobs
     
+    if request.detected_upload_window is not None:
+        allowed_windows = ['last_1_day', 'last_7_days', 'last_31_days']
+        if request.detected_upload_window not in allowed_windows:
+            raise HTTPException(
+                status_code=400,
+                detail=f"detected_upload_window must be one of {allowed_windows}"
+            )
+        updates['detected_upload_window'] = request.detected_upload_window
+    
     if not updates:
         raise HTTPException(
             status_code=400,
@@ -113,5 +124,6 @@ async def update_user_settings(
         theme=updated_settings.get('theme', 'dark') if updated_settings else 'dark',
         timezone=updated_settings.get('timezone', 'America/Los_Angeles') if updated_settings else 'America/Los_Angeles',
         auto_approve_jobs=bool(updated_settings.get('auto_approve_jobs', False)) if updated_settings else False,
+        detected_upload_window=updated_settings.get('detected_upload_window', 'last_7_days') if updated_settings else 'last_7_days',
         notifications=notifications
     )

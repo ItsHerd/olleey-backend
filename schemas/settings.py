@@ -16,6 +16,7 @@ class UserSettings(BaseModel):
     timezone: str = "America/Los_Angeles"  # IANA timezone
     notifications: NotificationSettings = NotificationSettings()  # Default notification settings
     auto_approve_jobs: bool = False
+    detected_upload_window: str = "last_7_days"  # "last_1_day", "last_7_days", or "last_31_days"
     
     class Config:
         json_schema_extra = {
@@ -23,6 +24,7 @@ class UserSettings(BaseModel):
                 "theme": "dark",
                 "timezone": "America/Los_Angeles",
                 "auto_approve_jobs": False,
+                "detected_upload_window": "last_7_days",
                 "notifications": {
                     "email_notifications": True,
                     "distribution_updates": True,
@@ -38,6 +40,7 @@ class UpdateUserSettingsRequest(BaseModel):
     timezone: Optional[str] = None  # IANA timezone
     notifications: Optional[NotificationSettings] = None
     auto_approve_jobs: Optional[bool] = None
+    detected_upload_window: Optional[str] = None  # "last_1_day", "last_7_days", or "last_31_days"
     
     class Config:
         json_schema_extra = {
@@ -45,6 +48,7 @@ class UpdateUserSettingsRequest(BaseModel):
                 "theme": "light",
                 "timezone": "America/New_York",
                 "auto_approve_jobs": True,
+                "detected_upload_window": "last_31_days",
                 "notifications": {
                     "email_notifications": False,
                     "distribution_updates": True,
