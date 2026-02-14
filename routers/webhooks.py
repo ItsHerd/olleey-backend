@@ -222,8 +222,9 @@ async def webhook_notification(
                     "comment_count": metadata.get("comment_count"),
                     "language_code": metadata.get("language_code"),
                     "channel_name": metadata.get("channel_name"),
-                    "status": "detected",
-                    "video_type": "youtube",
+                    "status": "draft",
+                    "video_type": "original",
+                    "source_video_id": None,
                 }
             )
 

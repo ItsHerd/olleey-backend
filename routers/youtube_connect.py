@@ -658,19 +658,8 @@ async def youtube_connection_callback(
             </html>
             """
             return HTMLResponse(content=html_content, status_code=200)
-    except Exception as e:
-            # Handle any unexpected errors during token exchange
-            error_msg = str(e)
-            print(f"[DEBUG] Exception during token exchange: {error_msg}")
-            frontend_url = getattr(settings, 'frontend_url', None) or "http://localhost:3000"
-            if not frontend_url.startswith('http://') and not frontend_url.startswith('https://'):
-                frontend_url = f"http://{frontend_url}"
-            from urllib.parse import quote
-            error_message = quote(f"Token exchange failed: {error_msg}", safe='')
-            redirect_url = f"{frontend_url}/youtube/connect/error?error={error_message}"
-            return RedirectResponse(url=redirect_url, status_code=303)
     except HTTPException as http_ex:
-        # If HTTPException, redirect to frontend with error
+        # Catch HTTPException first (before generic Exception)
         frontend_url = getattr(settings, 'frontend_url', None) or "http://localhost:3000"
         if not frontend_url.startswith('http://') and not frontend_url.startswith('https://'):
             frontend_url = f"http://{frontend_url}"
@@ -680,13 +669,14 @@ async def youtube_connection_callback(
         print(f"[DEBUG] HTTPException caught, redirecting to: {redirect_url}")
         return RedirectResponse(url=redirect_url, status_code=303)
     except Exception as e:
-        # Redirect to frontend with error message
+        # Handle any unexpected errors during token exchange
+        error_msg = str(e)
+        print(f"[DEBUG] Exception during token exchange: {error_msg}")
         frontend_url = getattr(settings, 'frontend_url', None) or "http://localhost:3000"
-        # Ensure it's a full URL
         if not frontend_url.startswith('http://') and not frontend_url.startswith('https://'):
             frontend_url = f"http://{frontend_url}"
         from urllib.parse import quote
-        error_message = quote(str(e), safe='')
+        error_message = quote(f"Token exchange failed: {error_msg}", safe='')
         redirect_url = f"{frontend_url}/youtube/connect/error?error={error_message}"
         return RedirectResponse(url=redirect_url, status_code=303)
 

@@ -184,7 +184,7 @@ async def create_job(
             updated_at = datetime.fromtimestamp(updated_at)
         
         return ProcessingJobResponse(
-            job_id=job['id'],
+            job_id=job['job_id'],
             status=job.get('status', 'pending'),
             progress=job.get('progress', 0),
             source_video_id=job.get('source_video_id'),
@@ -451,7 +451,7 @@ async def create_manual_job(
             updated_at = datetime.fromtimestamp(updated_at)
         
         return ProcessingJobResponse(
-            job_id=job['id'],
+            job_id=job['job_id'],
             status=job.get('status', 'pending'),
             progress=job.get('progress', 0),
             source_video_id=job.get('source_video_id'),
@@ -513,7 +513,7 @@ async def get_job(
         created_at = datetime.fromtimestamp(created_at) if created_at else None
     
     return ProcessingJobResponse(
-        job_id=job['id'],
+        job_id=job['job_id'],
         status=job.get('status', 'pending'),
         progress=job.get('progress'),
         source_video_id=job.get('source_video_id'),
@@ -581,7 +581,7 @@ async def list_jobs(
                 completed_at = datetime.fromtimestamp(completed_at)
         
         job_responses.append(ProcessingJobResponse(
-            job_id=job['id'],
+            job_id=job['job_id'],
             status=job.get('status', 'pending'),
             progress=job.get('progress'),
             source_video_id=job.get('source_video_id'),

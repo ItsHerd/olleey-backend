@@ -128,15 +128,14 @@ async def enqueue_dubbing_job(
         "status": initial_status,
         "target_languages": target_languages,
         "progress": 0,
-        "is_simulation": is_simulation,
-        "current_stage": "queued" if auto_approve else "waiting_approval",
         "workflow_state": {
             "review": {
                 "status": "auto_approved" if auto_approve else "waiting_approval",
                 "source": "webhook",
-            }
+            },
+            "is_simulation": is_simulation,
+            "metadata": metadata or {},
         },
-        "dubbing_metadata": metadata or {},
     }
     created_job = firestore_service.create_processing_job(job_data)
     job_id = created_job.get("job_id") if isinstance(created_job, dict) else None

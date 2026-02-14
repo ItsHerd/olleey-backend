@@ -32,11 +32,12 @@ async def create_project(
         if not conn:
             raise HTTPException(status_code=400, detail="Invalid master_connection_id")
 
-    project_id = supabase_service.create_project(
-        user_id=user_id,
-        name=request.name,
-        master_connection_id=request.master_connection_id
-    )
+    project_data = {
+        "user_id": user_id,
+        "name": request.name,
+    }
+    created = supabase_service.create_project(project_data)
+    project_id = created.get("id") if isinstance(created, dict) else created
     
     # Log activity
     supabase_service.log_activity(

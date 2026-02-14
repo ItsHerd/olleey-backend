@@ -291,33 +291,7 @@ class SupabaseService:
         return result.data[0] if result.data else {}
 
     # ============================================================
-    # ACTIVITY LOGS (Optional)
-    # ============================================================
-
-    def log_activity(
-        self,
-        user_id: str,
-        project_id: Optional[str],
-        action: str,
-        details: str
-    ) -> None:
-        """Log user activity (can be implemented later)."""
-        # TODO: Create activity_logs table and implement
-        pass
-
-    def list_activity_logs(
-        self,
-        user_id: str,
-        project_id: Optional[str] = None,
-        limit: int = 20
-    ) -> List[Dict[str, Any]]:
-        """Get activity logs for a user."""
-        # TODO: Implement when activity_logs table is created
-        # For now, return empty list to prevent errors
-        return []
-
-    # ============================================================
-    # YOUTUBE CONNECTIONS (Still in Firestore)
+    # YOUTUBE CONNECTIONS
     # ============================================================
 
     def delete_project(self, project_id: str) -> bool:

@@ -330,11 +330,11 @@ async def create_channel(
         if not existing_projects:
             # No projects exist -> Create Default Project
             print(f"[DEBUG] No projects found for user {user_id}. Creating 'Default Project'.")
-            target_project_id = supabase_service.create_project(
-                user_id=user_id,
-                name="Default Project",
-                master_connection_id=master_connection_id
-            )
+            created_project = supabase_service.create_project({
+                "user_id": user_id,
+                "name": "Default Project",
+            })
+            target_project_id = created_project.get("id") if isinstance(created_project, dict) else created_project
             
             # Log the auto-creation
             supabase_service.log_activity(
