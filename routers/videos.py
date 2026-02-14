@@ -422,22 +422,27 @@ async def list_videos(
         # Get videos from uploads playlist
         playlist_items = []
         next_page_token = None
-        while len(playlist_items) < remaining_limit:
-            request_params = {
-                'part': 'snippet,contentDetails',
-                'playlistId': uploads_playlist_id,
-                'maxResults': min(remaining_limit - len(playlist_items), 50)
-            }
-            if next_page_token:
-                request_params['pageToken'] = next_page_token
-            
-            playlist_response = await asyncio.to_thread(
-                youtube.playlistItems().list(**request_params).execute
-            )
-            playlist_items.extend(playlist_response.get('items', []))
-            next_page_token = playlist_response.get('nextPageToken')
-            if not next_page_token:
-                break
+        try:
+            while len(playlist_items) < remaining_limit:
+                request_params = {
+                    'part': 'snippet,contentDetails',
+                    'playlistId': uploads_playlist_id,
+                    'maxResults': min(remaining_limit - len(playlist_items), 50)
+                }
+                if next_page_token:
+                    request_params['pageToken'] = next_page_token
+                
+                playlist_response = await asyncio.to_thread(
+                    youtube.playlistItems().list(**request_params).execute
+                )
+                playlist_items.extend(playlist_response.get('items', []))
+                next_page_token = playlist_response.get('nextPageToken')
+                if not next_page_token:
+                    break
+        except HttpError as yt_err:
+            print(f"[WARNING] YouTube API error fetching playlist {uploads_playlist_id}: {yt_err}")
+            # Playlist not found or inaccessible — return just uploaded videos
+            return VideoListResponse(videos=final_videos, total=len(final_videos))
         
         if not playlist_items:
             # No YouTube videos, return just uploaded videos
