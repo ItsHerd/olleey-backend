@@ -847,8 +847,17 @@ async def sync_recent_detected_uploads(
     days = max(1, min(days, 31))
     per_channel_limit = max(1, min(per_channel_limit, 50))
 
+    print(f"\n[SYNC] ===== sync_recent_detected_uploads START =====")
+    print(f"[SYNC] user_id={user_id}, days={days}, per_channel_limit={per_channel_limit}")
+
     connections = supabase_service.get_youtube_connections(user_id)
+    print(f"[SYNC] Found {len(connections) if connections else 0} YouTube connections")
+    if connections:
+        for i, c in enumerate(connections):
+            print(f"[SYNC]   connection[{i}]: id={c.get('connection_id')}, channel={c.get('youtube_channel_id')}, name={c.get('channel_name')}")
+
     if not connections:
+        print(f"[SYNC] No connected channels found. Returning early.")
         return {
             "status": "ok",
             "channels_scanned": 0,
@@ -860,21 +869,15 @@ async def sync_recent_detected_uploads(
 
     language_channels = supabase_service.get_language_channels(user_id)
     target_languages = sorted({ch.get("language_code") for ch in language_channels if ch.get("language_code")})
-    if not target_languages:
-        return {
-            "status": "ok",
-            "channels_scanned": len(connections),
-            "videos_seen": 0,
-            "videos_upserted": 0,
-            "jobs_created": 0,
-            "message": "No target languages configured.",
-        }
+    print(f"[SYNC] Language channels: {len(language_channels)}, target_languages: {target_languages}")
 
     default_project_id = next((ch.get("project_id") for ch in language_channels if ch.get("project_id")), None)
+    print(f"[SYNC] default_project_id={default_project_id}")
 
     from services.job_queue import enqueue_dubbing_job
 
     published_after = (datetime.utcnow() - timedelta(days=days)).replace(microsecond=0).isoformat() + "Z"
+    print(f"[SYNC] publishedAfter={published_after}")
 
     seen_video_ids = set()
     channels_scanned = 0
@@ -886,14 +889,18 @@ async def sync_recent_detected_uploads(
         connection_id = conn.get("connection_id")
         channel_id = conn.get("youtube_channel_id")
         if not channel_id:
+            print(f"[SYNC] Skipping connection {connection_id}: no youtube_channel_id")
             continue
 
+        print(f"[SYNC] Building YouTube service for connection={connection_id}, channel={channel_id}")
         youtube = await asyncio.to_thread(get_youtube_service_helper, user_id, connection_id, False)
         if not youtube:
+            print(f"[SYNC] YouTube service is None for connection={connection_id} (likely mock/expired credentials)")
             continue
 
         channels_scanned += 1
         try:
+            print(f"[SYNC] Calling youtube.search().list(channelId={channel_id}, publishedAfter={published_after})")
             req = youtube.search().list(
                 part="id,snippet",
                 channelId=channel_id,
@@ -903,7 +910,9 @@ async def sync_recent_detected_uploads(
                 maxResults=per_channel_limit,
             )
             response = await asyncio.to_thread(req.execute)
-        except Exception:
+            print(f"[SYNC] YouTube search returned {len(response.get('items', []))} items")
+        except Exception as e:
+            print(f"[SYNC] ERROR: YouTube search failed for channel {channel_id}: {type(e).__name__}: {e}")
             continue
 
         for item in response.get("items", []):
@@ -915,6 +924,7 @@ async def sync_recent_detected_uploads(
 
             existing_job = supabase_service.get_job_by_video(video_id, user_id)
             if existing_job:
+                print(f"[SYNC] Video {video_id} already has a job, skipping")
                 continue
 
             snippet = item.get("snippet", {})
@@ -926,39 +936,50 @@ async def sync_recent_detected_uploads(
                 or {}
             )
 
-            supabase_service.upsert_video({
-                "video_id": video_id,
-                "source_video_id": video_id,
-                "user_id": user_id,
-                "project_id": default_project_id,
-                "channel_id": channel_id,
-                "channel_name": snippet.get("channelTitle"),
-                "title": snippet.get("title") or f"Video {video_id}",
-                "description": snippet.get("description") or "",
-                "thumbnail_url": thumb.get("url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
-                "published_at": snippet.get("publishedAt"),
-                "status": "detected",
-                "video_type": "youtube",
-            })
-            videos_upserted += 1
-
-            # Backfilled uploads should enter pre-start approval queue.
-            await enqueue_dubbing_job(
-                source_video_id=video_id,
-                source_channel_id=channel_id,
-                user_id=user_id,
-                target_languages=target_languages,
-                project_id=default_project_id,
-                auto_approve=False,
-                metadata={
-                    "detected_via": "manual_backfill_sync",
+            try:
+                upsert_data = {
+                    "video_id": video_id,
+                    "source_video_id": None,
+                    "user_id": user_id,
+                    "project_id": default_project_id,
+                    "channel_id": channel_id,
+                    "channel_name": snippet.get("channelTitle"),
+                    "title": snippet.get("title") or f"Video {video_id}",
+                    "description": snippet.get("description") or "",
+                    "thumbnail_url": thumb.get("url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
                     "published_at": snippet.get("publishedAt"),
-                    "title": snippet.get("title"),
-                },
-                db=None,
-                background_tasks=None,
-            )
-            jobs_created += 1
+                    "status": "draft",
+                    "video_type": "original",
+                }
+                print(f"[SYNC] Upserting video: {video_id} - '{upsert_data['title'][:50]}'")
+                result = supabase_service.upsert_video(upsert_data)
+                print(f"[SYNC] Upsert result: {result}")
+                videos_upserted += 1
+            except Exception as e:
+                print(f"[SYNC] ERROR: Upsert failed for video {video_id}: {type(e).__name__}: {e}")
+                continue
+
+            # Only create jobs if target languages are configured
+            if target_languages:
+                try:
+                    await enqueue_dubbing_job(
+                        source_video_id=video_id,
+                        source_channel_id=channel_id,
+                        user_id=user_id,
+                        target_languages=target_languages,
+                        project_id=default_project_id,
+                        auto_approve=False,
+                        metadata={
+                            "detected_via": "manual_backfill_sync",
+                            "published_at": snippet.get("publishedAt"),
+                            "title": snippet.get("title"),
+                        },
+                        db=None,
+                        background_tasks=None,
+                    )
+                    jobs_created += 1
+                except Exception as e:
+                    print(f"[SYNC] ERROR: enqueue_dubbing_job failed for {video_id}: {type(e).__name__}: {e}")
 
     supabase_service.log_activity(
         user_id=user_id,
@@ -966,6 +987,9 @@ async def sync_recent_detected_uploads(
         action="Backfilled detected uploads",
         details=f"Scanned {channels_scanned} channels. Seen {videos_seen} videos. Created {jobs_created} jobs.",
     )
+
+    print(f"[SYNC] DONE: scanned={channels_scanned}, seen={videos_seen}, upserted={videos_upserted}, jobs={jobs_created}")
+    print(f"[SYNC] ===== sync_recent_detected_uploads END =====\n")
 
     return {
         "status": "ok",
