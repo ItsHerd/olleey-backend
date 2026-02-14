@@ -565,11 +565,11 @@ async def youtube_connection_callback(
                         # If it's a satellite connection (has master_connection_id), use that instead
                         project_master_id = master_connection_id if master_connection_id else connection_id
                         
-                        target_project_id = firestore_service.create_project(
-                            user_id=user_id,
-                            name="Default Project",
-                            master_connection_id=project_master_id
-                        )
+                        project_result = firestore_service.create_project({
+                            "user_id": user_id,
+                            "name": "Default Project",
+                        })
+                        target_project_id = project_result.get("id") if isinstance(project_result, dict) else None
                         
                         # Log the auto-creation
                         firestore_service.log_activity(
