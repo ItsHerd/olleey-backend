@@ -25,7 +25,25 @@ class SupabaseService:
     def __init__(self):
         """Initialize Supabase client."""
         self.client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        self._warned_missing_tables: set[str] = set()
         print(f"✅ Supabase connected: {SUPABASE_URL}")
+
+    def _is_missing_table_error(self, error: Exception, table_name: str) -> bool:
+        message = str(error)
+        return (
+            "PGRST205" in message
+            or f"Could not find the table 'public.{table_name}'" in message
+            or f"relation \"{table_name}\" does not exist" in message
+        )
+
+    def _warn_missing_table_once(self, table_name: str):
+        if table_name in self._warned_missing_tables:
+            return
+        self._warned_missing_tables.add(table_name)
+        print(
+            f"[WARN] Supabase table '{table_name}' is missing. "
+            "Falling back to users.preferences for settings."
+        )
 
     # ============================================================
     # VIDEOS
@@ -78,7 +96,7 @@ class SupabaseService:
         if 'created_at' not in video_data:
             video_data['created_at'] = datetime.now(timezone.utc).isoformat()
         video_data['updated_at'] = datetime.now(timezone.utc).isoformat()
-        result = self.client.table('videos').upsert(video_data).execute()
+        result = self.client.table('videos').upsert(video_data, on_conflict='video_id,user_id').execute()
         return result.data[0] if result.data else {}
 
     def update_video(self, video_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -680,6 +698,33 @@ class SupabaseService:
             print(f"Error deleting language channel {channel_id}: {e}")
             return False
 
+    def create_language_channel(self, user_id: str, channel_id: str,
+                               language_code: str,
+                               channel_name: Optional[str] = None,
+                               channel_avatar_url: Optional[str] = None,
+                               master_connection_id: Optional[str] = None,
+                               project_id: Optional[str] = None) -> str:
+        """Create language channel with a single associated language."""
+        channel_doc_id = str(uuid.uuid4())
+        data = {
+            'id': channel_doc_id,
+            'user_id': user_id,
+            'project_id': project_id,
+            'channel_id': channel_id,
+            'language_code': language_code,
+            'channel_name': channel_name,
+            'channel_avatar_url': channel_avatar_url,
+            'master_connection_id': master_connection_id,
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        }
+        try:
+            self.client.table('channels').insert(data).execute()
+            return channel_doc_id
+        except Exception as e:
+            print(f"Error creating language channel: {e}")
+            return ""
+
     # ============================================================
     # USER SETTINGS & USERS
     # ============================================================
@@ -718,6 +763,15 @@ class SupabaseService:
             result = self.client.table('user_settings').select('*').eq('user_id', user_id).single().execute()
             return result.data if result.data else None
         except Exception as e:
+            if self._is_missing_table_error(e, 'user_settings'):
+                self._warn_missing_table_once('user_settings')
+                try:
+                    user_result = self.client.table('users').select('preferences').eq('id', user_id).single().execute()
+                    preferences = (user_result.data or {}).get('preferences', {})
+                    return preferences if isinstance(preferences, dict) else None
+                except Exception as fallback_error:
+                    print(f"Error getting fallback user preferences for {user_id}: {fallback_error}")
+                    return None
             print(f"Error getting user settings {user_id}: {e}")
             return None
 
@@ -728,6 +782,27 @@ class SupabaseService:
         try:
             self.client.table('user_settings').upsert(updates).execute()
         except Exception as e:
+            if self._is_missing_table_error(e, 'user_settings'):
+                self._warn_missing_table_once('user_settings')
+                try:
+                    user_result = self.client.table('users').select('preferences').eq('id', user_id).single().execute()
+                    current_preferences = (user_result.data or {}).get('preferences', {})
+                    if not isinstance(current_preferences, dict):
+                        current_preferences = {}
+                    settings_updates = {
+                        key: value
+                        for key, value in updates.items()
+                        if key not in {'user_id', 'updated_at'}
+                    }
+                    merged_preferences = {**current_preferences, **settings_updates}
+                    self.client.table('users').update({
+                        'preferences': merged_preferences,
+                        'updated_at': datetime.now(timezone.utc).isoformat()
+                    }).eq('id', user_id).execute()
+                    return
+                except Exception as fallback_error:
+                    print(f"Error updating fallback user preferences {user_id}: {fallback_error}")
+                    return
             print(f"Error updating user settings {user_id}: {e}")
 
 

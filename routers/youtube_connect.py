@@ -584,10 +584,14 @@ async def youtube_connection_callback(
                 projects = firestore_service.list_projects(user_id)
                 target_project_id = projects[0].get('id') if projects else None
 
-                existing_language_channels = firestore_service.get_language_channels(user_id)
-                existing_language_channel = next(
-                    (ch for ch in existing_language_channels if ch.get('channel_id') == youtube_channel_id),
-                    None
+                # channel_id is globally unique in DB; check globally, not only by user.
+                # If another user already has this channel row, we still allow the OAuth
+                # connection for current user but skip creating/updating channels table.
+                existing_channel = firestore_service.get_channel(youtube_channel_id)
+                channel_owned_by_other_user = bool(
+                    existing_channel
+                    and existing_channel.get("user_id")
+                    and existing_channel.get("user_id") != user_id
                 )
 
                 channel_updates = {
@@ -597,25 +601,47 @@ async def youtube_connection_callback(
                     'video_count': video_count,
                     'project_id': target_project_id,
                     'is_master': True,
-                    'language_code': existing_language_channel.get('language_code') if existing_language_channel else 'en',
-                    'language_name': existing_language_channel.get('language_name') if existing_language_channel else 'English',
+                    'language_code': existing_channel.get('language_code') if (existing_channel and not channel_owned_by_other_user) else 'en',
+                    'language_name': existing_channel.get('language_name') if (existing_channel and not channel_owned_by_other_user) else 'English',
                 }
 
-                if existing_language_channel:
+                if existing_channel and not channel_owned_by_other_user:
                     firestore_service.update_channel(youtube_channel_id, channel_updates)
+                elif not existing_channel:
+                    try:
+                        firestore_service.create_channel({
+                            'user_id': user_id,
+                            'channel_id': youtube_channel_id,
+                            'project_id': target_project_id,
+                            'channel_name': youtube_channel_name,
+                            'thumbnail_url': channel_avatar_url,
+                            'subscriber_count': subscriber_count,
+                            'video_count': video_count,
+                            'is_master': True,
+                            'language_code': 'en',
+                            'language_name': 'English',
+                        })
+                    except Exception as create_channel_error:
+                        # Handle race condition where channel was inserted after our existence check.
+                        err_msg = str(create_channel_error)
+                        if "23505" in err_msg or "channels_channel_id_key" in err_msg:
+                            existing_channel_after_conflict = firestore_service.get_channel(youtube_channel_id)
+                            if existing_channel_after_conflict and existing_channel_after_conflict.get("user_id") == user_id:
+                                firestore_service.update_channel(youtube_channel_id, channel_updates)
+                            else:
+                                # Channel now belongs to another user. Keep OAuth connection and continue.
+                                print(
+                                    f"[YOUTUBE_CONNECT] Channel row {youtube_channel_id} owned by another user after race; "
+                                    "skipping channels table update for current user."
+                                )
+                        else:
+                            raise
                 else:
-                    firestore_service.create_channel({
-                        'user_id': user_id,
-                        'channel_id': youtube_channel_id,
-                        'project_id': target_project_id,
-                        'channel_name': youtube_channel_name,
-                        'thumbnail_url': channel_avatar_url,
-                        'subscriber_count': subscriber_count,
-                        'video_count': video_count,
-                        'is_master': True,
-                        'language_code': 'en',
-                        'language_name': 'English',
-                    })
+                    # Channel exists for another user; keep OAuth connection but don't mutate shared channel row.
+                    print(
+                        f"[YOUTUBE_CONNECT] Channel row {youtube_channel_id} belongs to another user. "
+                        "Proceeding with connection without channels table update."
+                    )
             
             # Redirect to frontend with success message
             # Get frontend URL from settings or use default

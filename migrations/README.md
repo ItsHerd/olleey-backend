@@ -57,6 +57,31 @@ The database uses Supabase (PostgreSQL) and tracks the complete dubbing pipeline
 
 ---
 
+### 003_create_user_settings_table.sql
+**Purpose**: Create dedicated per-user settings storage used by `/settings`
+
+**New Table**:
+
+1. **`user_settings`**
+   - Stores UI + automation preferences per user
+   - Includes `theme`, `timezone`, `notifications`, `auto_approve_jobs`, `detected_upload_window`
+   - Indexed by `user_id`
+
+---
+
+### 004_normalize_status_constraints.sql
+**Purpose**: Normalize `status` constraints for job cancellation + pipeline compatibility
+
+**Changes**:
+- Rebuilds `processing_jobs.status` check to include:
+  - `pending`, `queued`, `downloading`, `transcribing`, `translating`, `voice_cloning`, `dubbing`, `lip_sync`,
+    `syncing`, `assembling`, `processing`, `waiting_approval`, `uploading`, `ready`, `completed`, `failed`, `cancelled`
+- Rebuilds `localized_videos.status` check to include:
+  - `not-started`, `queued`, `processing`, `waiting_approval`, `draft`, `live`, `published`, `failed`, `cancelled`
+- Safely drops unknown existing status-check constraints before adding standardized names.
+
+---
+
 ## How to Apply Migrations
 
 ### Option 1: Supabase Dashboard (Recommended)
@@ -76,6 +101,8 @@ psql "postgresql://postgres:[YOUR-PASSWORD]@db.[YOUR-PROJECT-REF].supabase.co:54
 # Apply migrations in order
 \i migrations/001_add_dubbing_pipeline_fields.sql
 \i migrations/002_create_dubbing_detail_tables.sql
+\i migrations/003_create_user_settings_table.sql
+\i migrations/004_normalize_status_constraints.sql
 ```
 
 ### Option 3: Using Supabase CLI

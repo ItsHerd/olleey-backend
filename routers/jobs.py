@@ -965,30 +965,64 @@ async def cancel_job(
         )
 
     try:
-        # Update job status to cancelled
-        supabase_service.update_processing_job(job_id, {
-            'status': 'cancelled'
-        })
+        def is_status_constraint_error(err: Exception) -> bool:
+            message = str(err).lower()
+            return (
+                "violates check constraint" in message
+                or "23514" in message
+                or "status_check" in message
+            )
+
+        applied_job_status = "cancelled"
+        # Update job status to cancelled (fallback for older DB constraints)
+        try:
+            supabase_service.update_processing_job(job_id, {
+                'status': 'cancelled'
+            })
+        except Exception as status_error:
+            if not is_status_constraint_error(status_error):
+                raise
+            logger.warning(
+                f"Cancel status 'cancelled' rejected by DB constraint for job {job_id}. "
+                "Falling back to status='failed'."
+            )
+            supabase_service.update_processing_job(job_id, {
+                'status': 'failed',
+                'error_message': 'Cancelled by user'
+            })
+            applied_job_status = "failed"
 
         # Update all associated localized videos to cancelled
         videos = supabase_service.get_localized_videos_by_job_id(job_id)
+        cancelled_videos = 0
         for video in videos:
-            supabase_service.update_localized_video(video['id'], {
-                'status': 'cancelled'
-            })
+            try:
+                supabase_service.update_localized_video(video['id'], {
+                    'status': 'cancelled'
+                })
+                cancelled_videos += 1
+            except Exception as video_status_error:
+                if not is_status_constraint_error(video_status_error):
+                    raise
+                # Older schemas may not allow "cancelled" on localized videos.
+                supabase_service.update_localized_video(video['id'], {
+                    'status': 'failed'
+                })
+                cancelled_videos += 1
 
         # Log activity
         supabase_service.log_activity(
             user_id=user_id,
             project_id=job.get('project_id'),
             action="Cancelled dubbing job",
-            details=f"Job {job_id} was cancelled by user."
+            details=f"Job {job_id} cancellation requested by user. Final status: {applied_job_status}."
         )
 
         return {
             "success": True,
-            "message": f"Job {job_id} cancelled successfully",
-            "cancelled_videos": len(videos)
+            "message": f"Job {job_id} cancellation applied",
+            "status_applied": applied_job_status,
+            "cancelled_videos": cancelled_videos
         }
 
     except Exception as e:

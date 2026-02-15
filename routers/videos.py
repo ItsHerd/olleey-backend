@@ -927,11 +927,6 @@ async def sync_recent_detected_uploads(
             seen_video_ids.add(video_id)
             videos_seen += 1
 
-            existing_job = supabase_service.get_job_by_video(video_id, user_id)
-            if existing_job:
-                print(f"[SYNC] Video {video_id} already has a job, skipping")
-                continue
-
             snippet = item.get("snippet", {})
             thumbs = snippet.get("thumbnails", {}) or {}
             thumb = (
@@ -941,6 +936,7 @@ async def sync_recent_detected_uploads(
                 or {}
             )
 
+            # Always upsert the video for this user (each user gets their own row)
             try:
                 upsert_data = {
                     "video_id": video_id,
@@ -962,6 +958,12 @@ async def sync_recent_detected_uploads(
                 videos_upserted += 1
             except Exception as e:
                 print(f"[SYNC] ERROR: Upsert failed for video {video_id}: {type(e).__name__}: {e}")
+                continue
+
+            # Only skip job creation if this user already has a job for this video
+            existing_job = supabase_service.get_job_by_video(video_id, user_id)
+            if existing_job:
+                print(f"[SYNC] Video {video_id} already has a job for user {user_id}, skipping job creation")
                 continue
 
             # Only create jobs if target languages are configured

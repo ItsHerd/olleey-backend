@@ -243,6 +243,17 @@ async def list_channels(
     return ChannelListResponse(channels=channel_responses)
 
 
+async def _background_sync_recent_uploads(user_id: str):
+    """Background task to sync recent uploads after channel creation."""
+    try:
+        from routers.videos import sync_recent_detected_uploads
+        mock_user = {"user_id": user_id}
+        result = await sync_recent_detected_uploads(days=7, per_channel_limit=20, current_user=mock_user)
+        print(f"[CHANNEL] Background sync completed for user {user_id}: {result}")
+    except Exception as e:
+        print(f"[CHANNEL] Background sync failed for user {user_id}: {e}")
+
+
 @router.post("", response_model=LanguageChannelResponse)
 async def create_channel(
     request: LanguageChannelRequest,
@@ -395,6 +406,9 @@ async def create_channel(
                 updated_lang_code = updated_channel.get('language_code', '')
                 updated_lang_name = LANGUAGE_NAMES.get(updated_lang_code, updated_lang_code.upper()) if updated_lang_code else None
                 
+                # Trigger background sync of recent uploads
+                asyncio.create_task(_background_sync_recent_uploads(user_id))
+
                 return LanguageChannelResponse(
                     id=updated_channel['id'],
                     channel_id=updated_channel.get('channel_id'),
@@ -448,6 +462,9 @@ async def create_channel(
         lang_code = channel.get('language_code', '')
         lang_name = LANGUAGE_NAMES.get(lang_code, lang_code.upper()) if lang_code else None
         
+        # Trigger background sync of recent uploads
+        asyncio.create_task(_background_sync_recent_uploads(user_id))
+
         return LanguageChannelResponse(
             id=channel['id'],
             channel_id=channel.get('channel_id'),
