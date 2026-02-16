@@ -1,18 +1,49 @@
 """Authentication middleware for Firebase Auth token verification."""
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
 from jose import jwt, JWTError
 from config import settings
 from services.supabase_db import supabase_service
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
-async def verify_supabase_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+def _resolve_dev_user(x_dev_user_id: Optional[str]) -> Optional[dict]:
+    """Return a development-only fallback user if enabled."""
+    # Allow in non-production environments (development/test), never in production.
+    if settings.environment == "production" or not settings.allow_dev_auth:
+        return None
+
+    user_id = (x_dev_user_id or "").strip() or settings.dev_auth_user_id
+    if not user_id:
+        return None
+
+    return {
+        "user_id": user_id,
+        "email": None,
+        "name": "Dev User",
+        "claims": {"provider": "dev_override"},
+    }
+
+
+async def verify_supabase_token(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    x_dev_user_id: Optional[str] = Header(default=None, alias="x-dev-user-id"),
+) -> dict:
     """
     Verify Supabase ID token and return user info.
     """
+    if not credentials:
+        dev_user = _resolve_dev_user(x_dev_user_id)
+        if dev_user:
+            return dev_user
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     token = credentials.credentials
     
     try:
@@ -50,6 +81,10 @@ async def verify_supabase_token(credentials: HTTPAuthorizationCredentials = Depe
                 }
         except Exception as e:
             print(f"[AUTH] Supabase API verification failed: {e}")
+
+        dev_user = _resolve_dev_user(x_dev_user_id)
+        if dev_user:
+            return dev_user
 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

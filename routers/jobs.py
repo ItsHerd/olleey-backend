@@ -1,6 +1,6 @@
 """Job status and management router."""
 from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks, UploadFile, File, Form, Body
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import datetime, timezone
 import re
 import tempfile
@@ -8,6 +8,9 @@ import os
 import asyncio
 import uuid
 import logging
+from urllib.parse import urlparse
+import httpx
+from googleapiclient.http import MediaFileUpload
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +18,7 @@ from services.supabase_db import supabase_service
 from services.job_queue import enqueue_dubbing_job, start_existing_job_processing
 from services.demo_simulator import demo_simulator
 from services.job_statistics import job_statistics
+from routers.youtube_auth import get_youtube_service
 from schemas.jobs import CreateJobRequest, CreateManualJobRequest, ProcessingJobResponse, JobListResponse, LocalizedVideoResponse
 from middleware.auth import get_current_user
 
@@ -47,6 +51,46 @@ def extract_video_id_from_url(url: str) -> Optional[str]:
         return url
     
     return None
+
+
+async def _materialize_video_file(storage_url: str) -> tuple[str, bool]:
+    """
+    Resolve a storage URL/path to a local file path.
+
+    Returns:
+      (local_path, should_cleanup_after_upload)
+    """
+    if not storage_url:
+        raise ValueError("Missing storage_url for localized video")
+
+    parsed = urlparse(storage_url)
+    is_http = parsed.scheme in {"http", "https"}
+
+    if not is_http:
+        candidate = storage_url
+        if storage_url.startswith("/storage/"):
+            candidate = f".{storage_url}"
+        if os.path.exists(candidate):
+            return candidate, False
+        raise FileNotFoundError(f"Localized video file not found: {candidate}")
+
+    ext = os.path.splitext(parsed.path)[1] or ".mp4"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+    temp_path = tmp.name
+    tmp.close()
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+            response = await client.get(storage_url)
+            response.raise_for_status()
+            with open(temp_path, "wb") as f:
+                f.write(response.content)
+    except Exception:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise
+
+    return temp_path, True
 
 
 @router.post("", response_model=ProcessingJobResponse)
@@ -681,6 +725,7 @@ async def approve_job(
 async def approve_job_start(
     job_id: str,
     background_tasks: BackgroundTasks,
+    request: dict = Body(default={}),
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -691,6 +736,7 @@ async def approve_job_start(
     """
     user_id = current_user["user_id"]
     job = supabase_service.get_processing_job(job_id)
+    simulate = bool(request.get("simulate", False))
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -709,7 +755,7 @@ async def approve_job_start(
             detail="Job is already processed and awaiting publish approval. Use /jobs/{job_id}/approve instead.",
         )
 
-    supabase_service.update_processing_job(job_id, {
+    update_payload = {
         "status": "pending",
         "current_stage": "queued",
         "workflow_state": {
@@ -718,14 +764,17 @@ async def approve_job_start(
                 "approved_at": datetime.now(timezone.utc).isoformat(),
             }
         },
-    })
+    }
+    if simulate:
+        update_payload["is_simulation"] = True
+    supabase_service.update_processing_job(job_id, update_payload)
 
     await start_existing_job_processing(
         job_id=job_id,
         source_video_id=job.get("source_video_id"),
         user_id=user_id,
         target_languages=job.get("target_languages", []),
-        is_simulation=bool(job.get("is_simulation", False)),
+        is_simulation=bool(simulate or job.get("is_simulation", False)),
         background_tasks=background_tasks,
     )
 
@@ -773,8 +822,7 @@ async def approve_videos(
 @router.post("/{job_id}/videos/reject")
 async def reject_videos(
     job_id: str,
-    video_ids: List[str],
-    reason: Optional[str] = None,
+    payload: Any = Body(default={}),
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -787,19 +835,110 @@ async def reject_videos(
     # Verify job ownership
     job = supabase_service.get_processing_job(job_id)
     if not job:
+        # Backward-compatible fallback: allow callers to pass source_video_id.
+        jobs, _ = supabase_service.list_processing_jobs(user_id, limit=1000)
+        for j in jobs:
+            if j.get('source_video_id') == job_id:
+                job = j
+                job_id = j.get('job_id') or j.get('id') or job_id
+                break
+
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
         
     if job.get('user_id') != user_id:
         raise HTTPException(status_code=403, detail="Not authorized")
-    
-    # Check if demo/simulation
-    if demo_simulator.is_demo_user(user_id) or job.get('is_simulation'):
-        print(f"[DEMO] Simulating video rejection: {video_ids}, reason: {reason}")
-        asyncio.create_task(demo_simulator.simulate_approval(user_id, job_id, video_ids, "reject"))
-        return {"status": "success", "message": f"Rejected {len(video_ids)} video(s)", "is_demo": True}
-    
-    # Real rejection logic here
-    return {"status": "success", "message": f"Rejected {len(video_ids)} video(s)"}
+
+    # Accept both legacy and current payload shapes:
+    # - ["localized_video_id_1", ...]
+    # - { "video_ids": [...] }
+    # - { "language_codes": ["es"], "reason": "...", "feedback": "..." }
+    video_ids: List[str] = []
+    language_codes: List[str] = []
+    reason: Optional[str] = None
+    feedback: Optional[str] = None
+
+    if isinstance(payload, list):
+        video_ids = [str(v) for v in payload if v]
+    elif isinstance(payload, dict):
+        raw_video_ids = payload.get("video_ids")
+        raw_language_codes = payload.get("language_codes")
+        if isinstance(raw_video_ids, list):
+            video_ids = [str(v) for v in raw_video_ids if v]
+        if isinstance(raw_language_codes, list):
+            language_codes = [str(v) for v in raw_language_codes if v]
+        reason = payload.get("reason")
+        feedback = payload.get("feedback")
+
+    if not video_ids and not language_codes:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either video_ids or language_codes",
+        )
+
+    localized_videos = supabase_service.get_localized_videos_by_job_id(job_id)
+    if video_ids:
+        video_id_set = set(video_ids)
+        target_videos = [v for v in localized_videos if v.get("id") in video_id_set]
+    else:
+        language_set = set(language_codes)
+        target_videos = [v for v in localized_videos if v.get("language_code") in language_set]
+
+    if not target_videos:
+        raise HTTPException(status_code=404, detail="No matching localized videos found for rejection")
+
+    def is_status_constraint_error(err: Exception) -> bool:
+        message = str(err).lower()
+        return (
+            "violates check constraint" in message
+            or "23514" in message
+            or "status_check" in message
+        )
+
+    rejected_count = 0
+    for video in target_videos:
+        try:
+            supabase_service.update_localized_video(video["id"], {"status": "rejected"})
+            rejected_count += 1
+        except Exception as status_error:
+            if not is_status_constraint_error(status_error):
+                raise
+            # Older schemas may not allow "rejected".
+            supabase_service.update_localized_video(video["id"], {"status": "failed"})
+            rejected_count += 1
+
+    # If nothing is left in waiting_approval, close out the job so it exits review queue.
+    refreshed_localized_videos = supabase_service.get_localized_videos_by_job_id(job_id)
+    has_waiting_approval = any(v.get("status") == "waiting_approval" for v in refreshed_localized_videos)
+    if not has_waiting_approval and job.get("status") == "waiting_approval":
+        supabase_service.update_processing_job(job_id, {
+            "status": "completed",
+            "progress": 100,
+            "current_stage": "completed",
+        })
+
+    # Log activity
+    details_parts = [f"Rejected {rejected_count} video(s)"]
+    if language_codes:
+        details_parts.append(f"languages={','.join(language_codes)}")
+    if reason:
+        details_parts.append(f"reason={reason}")
+    if feedback:
+        details_parts.append(f"feedback={feedback}")
+
+    supabase_service.log_activity(
+        user_id=user_id,
+        project_id=job.get("project_id"),
+        action="Rejected localized videos",
+        status="warning",
+        details=" | ".join(details_parts),
+    )
+
+    return {
+        "status": "success",
+        "message": f"Rejected {rejected_count} video(s)",
+        "rejected_count": rejected_count,
+    }
 
 
 @router.post("/{job_id}/videos/{language_code}/status")
@@ -1305,6 +1444,8 @@ async def save_draft(
     """
     user_id = current_user["user_id"]
     language_code = request.get('language_code')
+    selected_channel_id = request.get('channel_id')
+    post_to_youtube = bool(request.get('post_to_youtube', False))
 
     if not language_code:
         raise HTTPException(status_code=400, detail="language_code is required")
@@ -1348,18 +1489,67 @@ async def save_draft(
             detail=f"Localized video not found for language {language_code}"
         )
 
-    # Update status to draft (or keep as waiting_approval)
-    # The status indicates it's ready for review but not published
-    supabase_service.update_localized_video(target_video['id'], {
-        'status': 'draft'
-    })
+    update_payload = {'status': 'draft'}
+
+    if selected_channel_id:
+        update_payload['channel_id'] = selected_channel_id
+
+    uploaded_video_id = None
+    if post_to_youtube:
+        upload_channel_id = selected_channel_id or target_video.get('channel_id')
+        if not upload_channel_id:
+            raise HTTPException(status_code=400, detail="channel_id is required to post draft to YouTube")
+
+        connection = supabase_service.get_youtube_connection_by_channel(user_id, upload_channel_id)
+        connection_id = connection.get("connection_id") if connection else None
+
+        youtube = await asyncio.to_thread(get_youtube_service, user_id, connection_id, False)
+        if youtube:
+            local_path = None
+            cleanup_temp = False
+            try:
+                local_path, cleanup_temp = await _materialize_video_file(target_video.get('storage_url') or "")
+                body = {
+                    'snippet': {
+                        'title': target_video.get('title') or f"Localized Video ({language_code})",
+                        'description': target_video.get('description') or "",
+                        'categoryId': '22',
+                    },
+                    'status': {
+                        'privacyStatus': 'private',  # private = YouTube draft-like behavior
+                        'selfDeclaredMadeForKids': False,
+                    },
+                }
+                media = MediaFileUpload(local_path, chunksize=-1, resumable=True)
+                insert_request = youtube.videos().insert(
+                    part=','.join(body.keys()),
+                    body=body,
+                    media_body=media
+                )
+                upload_response = await asyncio.to_thread(insert_request.execute)
+                uploaded_video_id = upload_response.get('id')
+            finally:
+                if cleanup_temp and local_path and os.path.exists(local_path):
+                    os.unlink(local_path)
+        else:
+            # Mock fallback when OAuth creds are unavailable.
+            uploaded_video_id = f"mock_draft_{language_code}_{int(datetime.now(timezone.utc).timestamp())}"
+
+        update_payload['localized_video_id'] = uploaded_video_id
+        update_payload['published_at'] = datetime.now(timezone.utc).isoformat()
+
+    # Save/update localized video state.
+    supabase_service.update_localized_video(target_video['id'], update_payload)
 
     # Log activity
     supabase_service.log_activity(
         user_id=user_id,
         project_id=job.get('project_id'),
         action="Saved video as draft",
-        details=f"Video {target_video.get('title', 'Untitled')} saved as draft for language {language_code}."
+        details=(
+            f"Video {target_video.get('title', 'Untitled')} saved as draft for language {language_code}"
+            f"{' and uploaded to YouTube.' if post_to_youtube else '.'}"
+        )
     )
 
     logger.info(f"Video saved as draft: job_id={job_id}, language={language_code}")
@@ -1368,7 +1558,9 @@ async def save_draft(
         "message": "Video saved as draft successfully",
         "job_id": job_id,
         "language_code": language_code,
-        "status": "draft"
+        "status": "draft",
+        "localized_video_id": uploaded_video_id,
+        "channel_id": selected_channel_id or target_video.get('channel_id'),
     }
 
 

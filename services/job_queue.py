@@ -17,6 +17,18 @@ async def start_existing_job_processing(
     """Start processing for an existing job record."""
     from services.demo_simulator import demo_simulator
 
+    # Always honor simulation mode first (even for demo users) so the
+    # detected-upload flow completes in ~5 seconds and lands in review.
+    if is_simulation:
+        if not background_tasks:
+            return
+
+        async def process_job():
+            await simulate_dubbing_job(job_id)
+
+        background_tasks.add_task(process_job)
+        return
+
     # Check if demo user - use mock pipeline for realistic demo.
     if demo_simulator.is_demo_user(user_id):
         print(f"[JOB_QUEUE] Demo user detected - using mock pipeline")
@@ -80,10 +92,7 @@ async def start_existing_job_processing(
         return
 
     async def process_job():
-        if is_simulation:
-            await simulate_dubbing_job(job_id)
-        else:
-            await process_dubbing_job(job_id)
+        await process_dubbing_job(job_id)
 
     background_tasks.add_task(process_job)
 

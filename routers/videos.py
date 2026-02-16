@@ -976,6 +976,7 @@ async def sync_recent_detected_uploads(
                         target_languages=target_languages,
                         project_id=default_project_id,
                         auto_approve=False,
+                        is_simulation=True,
                         metadata={
                             "detected_via": "manual_backfill_sync",
                             "published_at": snippet.get("publishedAt"),

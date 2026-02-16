@@ -40,10 +40,56 @@ class SupabaseService:
         if table_name in self._warned_missing_tables:
             return
         self._warned_missing_tables.add(table_name)
-        print(
-            f"[WARN] Supabase table '{table_name}' is missing. "
-            "Falling back to users.preferences for settings."
+        print(f"[WARN] Supabase table '{table_name}' is missing. Skipping related operation.")
+
+    def _is_missing_column_error(self, error: Exception, column_name: str) -> bool:
+        message = str(error)
+        return (
+            "PGRST204" in message
+            or "schema cache" in message
+            or f"column '{column_name}'" in message
+            or f'"{column_name}"' in message and "does not exist" in message
         )
+
+    def _resolve_processing_job_internal_id(self, job_id: Optional[str]) -> Optional[str]:
+        """
+        Resolve a job identifier to processing_jobs.id.
+
+        Some callers pass external `processing_jobs.job_id`, while localized_videos.job_id
+        is FK-linked to `processing_jobs.id` in newer schemas.
+        """
+        if not job_id:
+            return None
+
+        # First try as internal PK.
+        try:
+            by_id = (
+                self.client.table('processing_jobs')
+                .select('id')
+                .eq('id', job_id)
+                .limit(1)
+                .execute()
+            )
+            if by_id.data:
+                return by_id.data[0].get('id')
+        except Exception:
+            pass
+
+        # Then try as external/job-facing ID.
+        try:
+            by_external = (
+                self.client.table('processing_jobs')
+                .select('id')
+                .eq('job_id', job_id)
+                .limit(1)
+                .execute()
+            )
+            if by_external.data:
+                return by_external.data[0].get('id')
+        except Exception:
+            pass
+
+        return None
 
     # ============================================================
     # VIDEOS
@@ -180,11 +226,26 @@ class SupabaseService:
         result = self.client.table('processing_jobs').insert(job_data).execute()
         return result.data[0] if result.data else {}
 
-    def update_processing_job(self, job_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
-        """Update a processing job."""
-        updates['updated_at'] = datetime.now(timezone.utc).isoformat()
+    def update_processing_job(
+        self,
+        job_id: str,
+        updates: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Update a processing job.
 
-        result = self.client.table('processing_jobs').update(updates).eq('job_id', job_id).execute()
+        Supports both call styles:
+        - update_processing_job(job_id, {"status": "processing"})
+        - update_processing_job(job_id, status="processing")
+        """
+        payload: Dict[str, Any] = {}
+        if isinstance(updates, dict):
+            payload.update(updates)
+        payload.update(kwargs)
+        payload['updated_at'] = datetime.now(timezone.utc).isoformat()
+
+        result = self.client.table('processing_jobs').update(payload).eq('job_id', job_id).execute()
         return result.data[0] if result.data else {}
 
     def delete_processing_job(self, job_id: str) -> bool:
@@ -201,9 +262,29 @@ class SupabaseService:
     # ============================================================
 
     def get_localized_videos_by_job_id(self, job_id: str) -> List[Dict[str, Any]]:
-        """Get all localized videos for a job."""
-        result = self.client.table('localized_videos').select('*').eq('job_id', job_id).execute()
-        return result.data or []
+        """Get all localized videos for a job (supports external and internal job IDs)."""
+        candidate_ids: List[str] = []
+        if job_id:
+            candidate_ids.append(job_id)
+
+        internal_job_id = self._resolve_processing_job_internal_id(job_id)
+        if internal_job_id and internal_job_id not in candidate_ids:
+            candidate_ids.append(internal_job_id)
+
+        videos: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+
+        for candidate in candidate_ids:
+            result = self.client.table('localized_videos').select('*').eq('job_id', candidate).execute()
+            for row in result.data or []:
+                row_id = row.get('id')
+                if row_id and row_id in seen_ids:
+                    continue
+                if row_id:
+                    seen_ids.add(row_id)
+                videos.append(row)
+
+        return videos
 
     def get_localized_video(self, video_id: str) -> Optional[Dict[str, Any]]:
         """Get a single localized video."""
@@ -214,24 +295,91 @@ class SupabaseService:
             print(f"Error getting localized video {video_id}: {e}")
             return None
 
-    def create_localized_video(self, video_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new localized video."""
-        if 'id' not in video_data:
-            video_data['id'] = str(uuid.uuid4())
-        if 'created_at' not in video_data:
-            video_data['created_at'] = datetime.now(timezone.utc).isoformat()
-        if 'updated_at' not in video_data:
-            video_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+    def create_localized_video(
+        self,
+        video_data: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Create a new localized video.
 
-        result = self.client.table('localized_videos').insert(video_data).execute()
-        return result.data[0] if result.data else {}
+        Supports both call styles:
+        - create_localized_video({...})
+        - create_localized_video(job_id="...", language_code="es", ...)
+        """
+        payload: Dict[str, Any] = {}
+        if isinstance(video_data, dict):
+            payload.update(video_data)
+        payload.update(kwargs)
 
-    def update_localized_video(self, video_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
-        """Update a localized video."""
-        updates['updated_at'] = datetime.now(timezone.utc).isoformat()
+        if 'id' not in payload:
+            payload['id'] = str(uuid.uuid4())
+        if 'created_at' not in payload:
+            payload['created_at'] = datetime.now(timezone.utc).isoformat()
+        if 'updated_at' not in payload:
+            payload['updated_at'] = datetime.now(timezone.utc).isoformat()
 
-        result = self.client.table('localized_videos').update(updates).eq('id', video_id).execute()
-        return result.data[0] if result.data else {}
+        # Normalize to processing_jobs.id for schemas where localized_videos.job_id
+        # references processing_jobs.id instead of processing_jobs.job_id.
+        if payload.get("job_id"):
+            internal_job_id = self._resolve_processing_job_internal_id(payload.get("job_id"))
+            if internal_job_id:
+                payload["job_id"] = internal_job_id
+
+        try:
+            result = self.client.table('localized_videos').insert(payload).execute()
+            return result.data[0] if result.data else {}
+        except Exception as e:
+            # Backward-compatible fallback for schemas that store `video_url`
+            # but do not expose `storage_url` / `dubbed_audio_url`.
+            fallback_payload = dict(payload)
+            if "storage_url" in fallback_payload and "video_url" not in fallback_payload:
+                fallback_payload["video_url"] = fallback_payload.get("storage_url")
+            fallback_payload.pop("storage_url", None)
+            fallback_payload.pop("dubbed_audio_url", None)
+
+            if fallback_payload == payload:
+                raise
+
+            print(f"[WARN] create_localized_video fallback due to schema mismatch: {e}")
+            result = self.client.table('localized_videos').insert(fallback_payload).execute()
+            return result.data[0] if result.data else {}
+
+    def update_localized_video(
+        self,
+        video_id: str,
+        updates: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Update a localized video.
+
+        Supports both call styles:
+        - update_localized_video(video_id, {"status": "draft"})
+        - update_localized_video(video_id, status="draft")
+        """
+        payload: Dict[str, Any] = {}
+        if isinstance(updates, dict):
+            payload.update(updates)
+        payload.update(kwargs)
+        payload['updated_at'] = datetime.now(timezone.utc).isoformat()
+
+        try:
+            result = self.client.table('localized_videos').update(payload).eq('id', video_id).execute()
+            return result.data[0] if result.data else {}
+        except Exception as e:
+            fallback_payload = dict(payload)
+            if "storage_url" in fallback_payload and "video_url" not in fallback_payload:
+                fallback_payload["video_url"] = fallback_payload.get("storage_url")
+            fallback_payload.pop("storage_url", None)
+            fallback_payload.pop("dubbed_audio_url", None)
+
+            if fallback_payload == payload:
+                raise
+
+            print(f"[WARN] update_localized_video fallback due to schema mismatch: {e}")
+            result = self.client.table('localized_videos').update(fallback_payload).eq('id', video_id).execute()
+            return result.data[0] if result.data else {}
 
     # ============================================================
     # CHANNELS
@@ -244,6 +392,27 @@ class SupabaseService:
             query = query.eq('project_id', project_id)
         result = query.execute()
         return result.data or []
+
+    def get_language_channel_by_language(self, user_id: str, language_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Get one channel for a user by language code.
+
+        Firestore compatibility helper used by dubbing/simulation flows.
+        """
+        try:
+            result = (
+                self.client.table('channels')
+                .select('*')
+                .eq('user_id', user_id)
+                .eq('language_code', language_code)
+                .order('created_at', desc=False)
+                .limit(1)
+                .execute()
+            )
+            return result.data[0] if result.data else None
+        except Exception as e:
+            print(f"Error getting language channel for user={user_id}, language={language_code}: {e}")
+            return None
 
     def get_channel(self, channel_id: str) -> Optional[Dict[str, Any]]:
         """Get a single channel."""
@@ -348,6 +517,9 @@ class SupabaseService:
             self.client.table('activity_logs').insert(data).execute()
             return log_id
         except Exception as e:
+            if self._is_missing_table_error(e, "activity_logs"):
+                self._warn_missing_table_once("activity_logs")
+                return ""
             print(f"Error logging activity: {e}")
             return ""
 
@@ -366,6 +538,9 @@ class SupabaseService:
             result = query.order('timestamp', desc=True).limit(limit).execute()
             return result.data or []
         except Exception as e:
+            if self._is_missing_table_error(e, "activity_logs"):
+                self._warn_missing_table_once("activity_logs")
+                return []
             print(f"Error listing activity logs: {e}")
             return []
 
@@ -643,6 +818,15 @@ class SupabaseService:
         except Exception as e:
             print(f"Error getting uploaded videos: {e}")
             return []
+
+    def get_uploaded_video(self, video_id: str) -> Optional[Dict[str, Any]]:
+        """Get a specific uploaded video by ID."""
+        try:
+            result = self.client.table('uploaded_videos').select('*').eq('id', video_id).single().execute()
+            return result.data if result.data else None
+        except Exception as e:
+            print(f"Error getting uploaded video {video_id}: {e}")
+            return None
 
     # ============================================================
     # LOCALIZED VIDEOS (EXTRA)

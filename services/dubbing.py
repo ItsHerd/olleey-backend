@@ -19,6 +19,9 @@ from services.pipeline_tracking import PipelineTracker
 from routers.youtube_auth import get_youtube_service
 from config import settings
 
+DEMO_SIM_USER_ID = "096c8549-ce41-4b94-b7f7-25e39eb7578b"
+DEMO_SIM_VIDEO_ID = "demo_yc_ceo_video_001"
+
 
 async def update_job_status_and_notify(job_id: str, **kwargs):
     """
@@ -368,6 +371,8 @@ async def process_dubbing_job(job_id: str):
 async def simulate_dubbing_job(job_id: str):
     """
     Simulate a dubbing job processing for UI testing.
+
+    Target UX: move from processing -> review in ~5 seconds.
     """
     job = firestore_service.get_processing_job(job_id)
     if not job:
@@ -376,12 +381,28 @@ async def simulate_dubbing_job(job_id: str):
     try:
         user_id = job.get('user_id')
         source_video_id = job.get('source_video_id')
+        source_channel_id = job.get('source_channel_id')
         target_languages = job.get('target_languages', [])
 
         print(f"[SIMULATION] Starting simulation for job {job_id}")
 
-        # Get source video metadata (uploaded video or YouTube video)
-        source_video = firestore_service.get_uploaded_video(source_video_id)
+        # Demo media used in review previews.
+        # These can be replaced with env-configured URLs later if needed.
+        demo_original_url = (
+            "https://wfjpbrcktxbwasbamchx.supabase.co/storage/v1/object/sign/videos/en.mp4"
+            "?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV84ZGQ0M2IwOS0zYWYwLTQ1NDAtYmE1Yy0xNTVmMjEwYzYzYzgiLCJhbGciOiJIUzI1NiJ9."
+            "eyJ1cmwiOiJ2aWRlb3MvZW4ubXA0IiwiaWF0IjoxNzcxMTk5NzY4LCJleHAiOjE4MDI3MzU3Njh9."
+            "40RfLVJTx7RaoLlJAOnMSzn8P8Zd97CyTboaagwITPc"
+        )
+        demo_spanish_url = (
+            "https://wfjpbrcktxbwasbamchx.supabase.co/storage/v1/object/sign/videos/es.mov"
+            "?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV84ZGQ0M2IwOS0zYWYwLTQ1NDAtYmE1Yy0xNTVmMjEwYzYzYzgiLCJhbGciOiJIUzI1NiJ9."
+            "eyJ1cmwiOiJ2aWRlb3MvZXMubW92IiwiaWF0IjoxNzcxMjE0MjQwLCJleHAiOjE4MDI3NTAyNDB9."
+            "qh4N65RZQ1bWHbGXQQGZ4H5yRXxWNJzqKfshTuUjoBo"
+        )
+
+        # Get source video metadata (videos table -> uploaded_videos fallback)
+        source_video = firestore_service.get_video(source_video_id) or firestore_service.get_uploaded_video(source_video_id)
         source_title = None
         source_thumbnail = None
         source_description = None
@@ -399,30 +420,90 @@ async def simulate_dubbing_job(job_id: str):
             source_title = f"Video {source_video_id}"
             source_thumbnail = f"https://i.ytimg.com/vi/{source_video_id}/hqdefault.jpg"
             source_description = ""
-            print(f"[SIMULATION] No uploaded video found, using defaults")
+            print(f"[SIMULATION] No source video row found, using defaults")
 
-        # 1. Simulate Downloading (0-10%)
-        time_step = 0.5  # Seconds per step
+        if not source_storage_url:
+            source_storage_url = demo_original_url
+            try:
+                firestore_service.update_video(source_video_id, {"storage_url": source_storage_url})
+            except Exception:
+                pass
+
+        # Ensure source row exists in `videos` so localized FK inserts won't fail.
+        # This is important for demo-seeded videos that may only exist in frontend state.
+        source_title = source_title or f"Video {source_video_id}"
+        source_description = source_description or ""
+        source_thumbnail = source_thumbnail or f"https://i.ytimg.com/vi/{source_video_id}/hqdefault.jpg"
+        try:
+            firestore_service.upsert_video({
+                "video_id": source_video_id,
+                "user_id": user_id,
+                "project_id": job.get("project_id"),
+                "channel_id": source_channel_id,
+                "channel_name": (source_video or {}).get("channel_name") or "Connected channel",
+                "title": source_title,
+                "description": source_description,
+                "thumbnail_url": source_thumbnail,
+                "storage_url": source_storage_url,
+                "video_url": source_storage_url,
+                "status": "draft",
+                "video_type": "original",
+                "source_video_id": None,
+                "published_at": (source_video or {}).get("published_at") or job.get("created_at") or datetime.utcnow().isoformat(),
+            })
+        except Exception as e:
+            print(f"[SIMULATION] Warning: failed to upsert source video row for {source_video_id}: {e}")
+
+        # Keep demo source metadata deterministic for this specific user/video.
+        if user_id == DEMO_SIM_USER_ID and source_video_id == DEMO_SIM_VIDEO_ID:
+            source_title = "YC CEO on the nature of startups"
+            source_description = (
+                "YC CEO Gary talks about how the new ai landscape is changing how we see startups."
+            )
+            source_thumbnail = "https://techcrunch.com/wp-content/uploads/2022/08/GettyImages-1058145366-1.jpg?w=1024"
+            source_storage_url = demo_original_url
+            try:
+                firestore_service.upsert_video({
+                    "video_id": source_video_id,
+                    "user_id": user_id,
+                    "project_id": job.get("project_id"),
+                    "channel_id": source_channel_id or "demo_channel_en",
+                    "channel_name": "Y Combinator",
+                    "title": source_title,
+                    "description": source_description,
+                    "thumbnail_url": source_thumbnail,
+                    "storage_url": source_storage_url,
+                    "video_url": source_storage_url,
+                    "status": "draft",
+                    "language_code": "en",
+                    "video_type": "original",
+                    "source_video_id": None,
+                    "published_at": (source_video or {}).get("published_at") or job.get("created_at") or datetime.utcnow().isoformat(),
+                })
+            except Exception as e:
+                print(f"[SIMULATION] Warning: failed to enforce demo source metadata: {e}")
+
+        # 5-second simulation timeline.
         await update_job_status_and_notify(job_id, status='downloading', progress=10)
-        await asyncio.sleep(time_step * 2)
+        await asyncio.sleep(1.0)
+        await update_job_status_and_notify(job_id, status='processing', progress=40)
+        await asyncio.sleep(1.6)
+        await update_job_status_and_notify(job_id, status='processing', progress=70)
+        await asyncio.sleep(1.4)
 
-        # 2. Simulate Processing (10-90%)
-        # Calculate steps based on languages
-        progress_per_lang = 80 / max(len(target_languages), 1)
-        current_progress = 10
-        
+        # Create localized video records (or update existing) near the end of simulation.
+        existing_localized = {
+            v.get("language_code"): v
+            for v in firestore_service.get_localized_videos_by_job_id(job_id)
+            if v.get("language_code")
+        }
+
+        localized_written = 0
+        # For demo user/video, keep output deterministic for review UI.
+        if user_id == DEMO_SIM_USER_ID and source_video_id == DEMO_SIM_VIDEO_ID:
+            target_languages = target_languages or ["es"]
+
         for lang in target_languages:
-            # Simulate ElevenLabs & Veo processing time
-            await update_job_status_and_notify(job_id, status='processing', progress=int(current_progress))
-            await asyncio.sleep(time_step)
-            
-            current_progress += progress_per_lang / 2
-            await update_job_status_and_notify(job_id, progress=int(current_progress))
-            await asyncio.sleep(time_step)
-            
-            current_progress += progress_per_lang / 2
-
-            # Create localized video record
             # Map language code to name
             language_names = {
                 'es': 'Spanish', 'fr': 'French', 'de': 'German', 'pt': 'Portuguese',
@@ -431,49 +512,89 @@ async def simulate_dubbing_job(job_id: str):
             }
             language_name = language_names.get(lang, lang.upper())
 
-            # Use source video storage URL or create mock URL
-            if source_storage_url:
-                # Copy/reference the uploaded video (in real implementation, would be dubbed version)
-                localized_storage_url = source_storage_url.replace('/original/', f'/{lang}/')
+            # Use known Spanish dubbed asset for es; fallback to source for others.
+            if lang == "es":
+                localized_storage_url = demo_spanish_url
             else:
-                localized_storage_url = f"/storage/videos/mock_dub_{lang}_{uuid.uuid4().hex[:6]}.mp4"
+                localized_storage_url = source_storage_url
 
             channel_id = ''
-            language_channel = firestore_service.get_language_channel_by_language(
-                user_id=user_id,
-                language_code=lang
-            )
-            if language_channel:
-                channel_id = language_channel.get('channel_id', '')
+            try:
+                language_channel = firestore_service.get_language_channel_by_language(
+                    user_id=user_id,
+                    language_code=lang
+                )
+                if language_channel:
+                    channel_id = language_channel.get('channel_id', '')
+            except Exception as e:
+                print(f"[SIMULATION] Warning: failed to resolve language channel for {lang}: {e}")
 
-            # Use actual source video title and thumbnail
-            localized_title = f"{source_title} ({language_name})" if source_title else f"Video ({lang})"
-            localized_description = source_description or f"Localized version in {language_name}"
+            if lang == "es":
+                if user_id == DEMO_SIM_USER_ID and source_video_id == DEMO_SIM_VIDEO_ID:
+                    localized_title = "CEO de YC sobre la naturaleza de las startups"
+                    localized_description = (
+                        "El CEO de YC, Gary, explica como el nuevo panorama de IA "
+                        "esta cambiando la forma en que entendemos las startups."
+                    )
+                else:
+                    localized_title = f"{source_title} (Español)" if source_title else "Video (Español)"
+                    localized_description = (
+                        f"Version en espanol de: {source_description}"
+                        if source_description
+                        else "Version en espanol lista para revision."
+                    )
+            else:
+                localized_title = f"{source_title} ({language_name})" if source_title else f"Video ({language_name})"
+                localized_description = source_description or f"Localized version in {language_name}"
 
-            firestore_service.create_localized_video(
-                job_id=job_id,
-                user_id=user_id,
-                source_video_id=source_video_id,
-                language_code=lang,
-                channel_id=channel_id,
-                status='waiting_approval',
-                storage_url=localized_storage_url,
-                thumbnail_url=source_thumbnail,  # Use actual thumbnail
-                dubbed_audio_url=f"/storage/audios/mock_dub_{lang}_{uuid.uuid4().hex[:6]}.mp3",
-                title=localized_title,  # Use actual title with language suffix
-                description=localized_description
-            )
+            try:
+                existing_video = existing_localized.get(lang)
+                if existing_video:
+                    firestore_service.update_localized_video(
+                        existing_video["id"],
+                        status='waiting_approval',
+                        storage_url=localized_storage_url,
+                        thumbnail_url=source_thumbnail,
+                        dubbed_audio_url=f"/storage/audios/mock_dub_{lang}_{uuid.uuid4().hex[:6]}.mp3",
+                        title=localized_title,
+                        description=localized_description,
+                        channel_id=channel_id or existing_video.get("channel_id"),
+                    )
+                else:
+                    firestore_service.create_localized_video(
+                        job_id=job_id,
+                        user_id=user_id,
+                        source_video_id=source_video_id,
+                        language_code=lang,
+                        channel_id=channel_id,
+                        status='waiting_approval',
+                        storage_url=localized_storage_url,
+                        thumbnail_url=source_thumbnail,
+                        dubbed_audio_url=f"/storage/audios/mock_dub_{lang}_{uuid.uuid4().hex[:6]}.mp3",
+                        title=localized_title,
+                        description=localized_description
+                    )
+                localized_written += 1
+            except Exception as e:
+                print(f"[SIMULATION] Warning: failed to write localized video for {lang}: {e}")
+
+            # Log activity (best-effort only)
+            try:
+                firestore_service.log_activity(
+                    user_id=user_id,
+                    project_id=job.get('project_id'),
+                    action="Processed video (Simulated)",
+                    details=f"Video localized for language {lang}. Awaiting approval."
+                )
+            except Exception as e:
+                print(f"[SIMULATION] Warning: activity log failed for {lang}: {e}")
+
+        if target_languages and localized_written == 0:
+            raise RuntimeError("Simulation could not create any localized videos")
             
-            # Log activity
-            firestore_service.log_activity(
-                user_id=user_id,
-                project_id=job.get('project_id'),
-                action="Processed video (Simulated)",
-                details=f"Video localized for language {lang}. Awaiting approval."
-            )
-            
-        # 3. Complete Processing -> Waiting Approval
-        await update_job_status_and_notify(job_id, status='waiting_approval', progress=90)
+        await asyncio.sleep(1.0)
+        # Complete Processing -> Waiting Approval at ~5s total
+        await update_job_status_and_notify(job_id, status='waiting_approval', progress=100)
         
         await notification_service.broadcast_system_message(
             user_id,

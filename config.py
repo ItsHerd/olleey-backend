@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # App Settings
     secret_key: str
     environment: str = "development"
+    allow_dev_auth: bool = True
+    dev_auth_user_id: Optional[str] = Field(
+        "096c8549-ce41-4b94-b7f7-25e39eb7578b",
+        env="DEV_AUTH_USER_ID"
+    )
     
     # PubSubHubbub
     webhook_base_url: Optional[str] = None  # Base URL for webhook callbacks
@@ -128,4 +133,3 @@ def validate_demo_config():
             langs = list(video_data.get('languages', {}).keys())
             if langs:
                 print(f"  Languages available: {', '.join(langs)}")
-

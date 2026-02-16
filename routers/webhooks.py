@@ -235,6 +235,7 @@ async def webhook_notification(
                 target_languages=target_languages,
                 project_id=default_project_id,
                 auto_approve=auto_approve,
+                is_simulation=True,
                 metadata={
                     "detected_via": "youtube_webhook",
                     "published_at": video_update.get("published_at"),
