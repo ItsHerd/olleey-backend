@@ -331,12 +331,15 @@ class SupabaseService:
             return result.data[0] if result.data else {}
         except Exception as e:
             # Backward-compatible fallback for schemas that store `video_url`
-            # but do not expose `storage_url` / `dubbed_audio_url`.
+            # but do not expose `storage_url` / `dubbed_audio_url` or
+            # deployments missing optional publish metadata columns.
             fallback_payload = dict(payload)
             if "storage_url" in fallback_payload and "video_url" not in fallback_payload:
                 fallback_payload["video_url"] = fallback_payload.get("storage_url")
             fallback_payload.pop("storage_url", None)
             fallback_payload.pop("dubbed_audio_url", None)
+            if self._is_missing_column_error(e, "published_at"):
+                fallback_payload.pop("published_at", None)
 
             if fallback_payload == payload:
                 raise
@@ -373,6 +376,8 @@ class SupabaseService:
                 fallback_payload["video_url"] = fallback_payload.get("storage_url")
             fallback_payload.pop("storage_url", None)
             fallback_payload.pop("dubbed_audio_url", None)
+            if self._is_missing_column_error(e, "published_at"):
+                fallback_payload.pop("published_at", None)
 
             if fallback_payload == payload:
                 raise

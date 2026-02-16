@@ -11,6 +11,7 @@ import logging
 from urllib.parse import urlparse
 import httpx
 from googleapiclient.http import MediaFileUpload
+from googleapiclient.errors import HttpError, ResumableUploadError
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,22 @@ def extract_video_id_from_url(url: str) -> Optional[str]:
         return url
     
     return None
+
+
+def _is_youtube_quota_error(err: Exception) -> bool:
+    """Best-effort check for YouTube quota-exceeded errors."""
+    if isinstance(err, HttpError):
+        try:
+            status = getattr(getattr(err, "resp", None), "status", None)
+            details = getattr(err, "error_details", None) or []
+            reason = ""
+            if isinstance(details, list) and details and isinstance(details[0], dict):
+                reason = str(details[0].get("reason", ""))
+            if status == 403 and "quotaExceeded" in reason:
+                return True
+        except Exception:
+            pass
+    return "quotaExceeded" in str(err)
 
 
 async def _materialize_video_file(storage_url: str) -> tuple[str, bool]:
@@ -1495,6 +1512,8 @@ async def save_draft(
         update_payload['channel_id'] = selected_channel_id
 
     uploaded_video_id = None
+    uploaded_to_youtube = False
+    upload_fallback_reason: Optional[str] = None
     if post_to_youtube:
         upload_channel_id = selected_channel_id or target_video.get('channel_id')
         if not upload_channel_id:
@@ -1526,13 +1545,39 @@ async def save_draft(
                     body=body,
                     media_body=media
                 )
-                upload_response = await asyncio.to_thread(insert_request.execute)
-                uploaded_video_id = upload_response.get('id')
+                try:
+                    upload_response = await asyncio.to_thread(insert_request.execute)
+                    uploaded_video_id = upload_response.get('id')
+                    uploaded_to_youtube = bool(uploaded_video_id)
+                except (HttpError, ResumableUploadError) as yt_err:
+                    if _is_youtube_quota_error(yt_err):
+                        upload_fallback_reason = "youtube_quota_exceeded"
+                        logger.warning(
+                            f"[save_draft] YouTube quota exceeded for user={user_id}, "
+                            f"job={job_id}, language={language_code}. Falling back to mock draft id."
+                        )
+                    else:
+                        upload_fallback_reason = "youtube_upload_failed"
+                        logger.warning(
+                            f"[save_draft] YouTube upload failed for user={user_id}, "
+                            f"job={job_id}, language={language_code}. Falling back to mock draft id. "
+                            f"error={yt_err}"
+                        )
+                    uploaded_video_id = f"mock_draft_{language_code}_{int(datetime.now(timezone.utc).timestamp())}"
+                except Exception as yt_err:
+                    upload_fallback_reason = "youtube_upload_failed"
+                    logger.warning(
+                        f"[save_draft] Unexpected YouTube upload error for user={user_id}, "
+                        f"job={job_id}, language={language_code}. Falling back to mock draft id. "
+                        f"error={yt_err}"
+                    )
+                    uploaded_video_id = f"mock_draft_{language_code}_{int(datetime.now(timezone.utc).timestamp())}"
             finally:
                 if cleanup_temp and local_path and os.path.exists(local_path):
                     os.unlink(local_path)
         else:
             # Mock fallback when OAuth creds are unavailable.
+            upload_fallback_reason = "youtube_unavailable"
             uploaded_video_id = f"mock_draft_{language_code}_{int(datetime.now(timezone.utc).timestamp())}"
 
         update_payload['localized_video_id'] = uploaded_video_id
@@ -1548,7 +1593,7 @@ async def save_draft(
         action="Saved video as draft",
         details=(
             f"Video {target_video.get('title', 'Untitled')} saved as draft for language {language_code}"
-            f"{' and uploaded to YouTube.' if post_to_youtube else '.'}"
+            f"{' and uploaded to YouTube.' if uploaded_to_youtube else (' (saved with local fallback).' if post_to_youtube else '.')}"
         )
     )
 
@@ -1561,6 +1606,8 @@ async def save_draft(
         "status": "draft",
         "localized_video_id": uploaded_video_id,
         "channel_id": selected_channel_id or target_video.get('channel_id'),
+        "uploaded_to_youtube": uploaded_to_youtube,
+        "upload_fallback_reason": upload_fallback_reason,
     }
 
 
