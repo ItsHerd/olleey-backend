@@ -81,11 +81,19 @@ async def verify_supabase_token(
                 }
         except Exception as e:
             print(f"[AUTH] Supabase API verification failed: {e}")
+            import sys
+            import traceback
+            sys.stderr.write(f"[AUTH] Supabase API verification failed: {e}\n")
+            traceback.print_exc(file=sys.stderr)
+            sys.stderr.flush()
 
         dev_user = _resolve_dev_user(x_dev_user_id)
         if dev_user:
             return dev_user
 
+        import sys
+        sys.stderr.write(f"[AUTH] Returning 401. Token was: {token[:10]}...\n")
+        sys.stderr.flush()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication token",
@@ -93,12 +101,14 @@ async def verify_supabase_token(
         )
         
     except Exception as e:
+        import sys
+        sys.stderr.write(f"[AUTH] Outer exception: {e}\n")
+        sys.stderr.flush()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Authentication failed: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
 
 # Dependency for getting current user
 async def get_current_user(user: dict = Depends(verify_supabase_token)) -> dict:
