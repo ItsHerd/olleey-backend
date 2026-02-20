@@ -1,6 +1,6 @@
 """Configuration settings for the YouTube Dubbing Platform."""
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
 
@@ -70,25 +70,17 @@ class Settings(BaseSettings):
     s3_presigned_url_expiry: int = 3600  # Presigned URL expiry in seconds
     cloudfront_url: Optional[str] = None  # Optional CloudFront CDN URL
     
-    # OAuth Scopes
-    use_mock_db: bool = False
-    youtube_scopes: list[str] = [
-        "https://www.googleapis.com/auth/youtube.upload",
-        "https://www.googleapis.com/auth/youtube.readonly",
-        "https://www.googleapis.com/auth/userinfo.email",
-        "https://www.googleapis.com/auth/userinfo.profile"
-    ]
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
-        extra = "ignore"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-        @classmethod
-        def parse_env_var(cls, field_name: str, raw_val: str):
-            if field_name in ["google_client_id", "google_client_secret", "google_redirect_uri", "supabase_url", "supabase_anon_key", "supabase_jwt_secret"]:
-                return raw_val.strip()
-            return raw_val
+    @classmethod
+    def parse_env_var(cls, field_name: str, raw_val: str):
+        if field_name in ["google_client_id", "google_client_secret", "google_redirect_uri", "supabase_url", "supabase_anon_key", "supabase_jwt_secret"]:
+            return raw_val.strip()
+        return raw_val
 
 
 settings = Settings()
