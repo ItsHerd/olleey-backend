@@ -18,6 +18,58 @@ except ImportError:
 from config import settings
 
 
+class SyncLabsError(Exception):
+    """Base exception for Sync Labs errors."""
+    def __init__(self, message: str, code: Optional[str] = None):
+        super().__init__(message)
+        self.code = code
+
+class SyncLabsValidationError(SyncLabsError):
+    """Exception for input validation errors (HTTP 400)."""
+    pass
+
+class SyncLabsRetryableError(SyncLabsError):
+    """Exception for system/infra errors that can be retried (HTTP 500/503)."""
+    pass
+
+
+def _parse_sync_error(error_code: Optional[str], default_message: str) -> Exception:
+    """Map Sync Labs error codes to appropriate exceptions."""
+    validation_errors = {
+        "generation_unsupported_model",
+        "generation_media_metadata_missing",
+        "generation_audio_length_exceeded",
+        "generation_text_length_exceeded",
+        "generation_audio_missing",
+        "generation_video_missing",
+        "generation_input_validation_failed",
+        # Batch API errors are also validation errors for the user
+        "batch_file_too_large",
+        "batch_too_many_requests",
+        "batch_insufficient_records",
+        "batch_invalid_jsonl",
+        "batch_duplicate_request_id",
+        "batch_invalid_endpoint"
+    }
+    
+    retryable_errors = {
+        "generation_timeout",
+        "generation_database_error",
+        "generation_infra_storage_error",
+        "generation_infra_resource_exhausted",
+        "generation_infra_service_unavailable",
+        "batch_concurrency_limit_reached"
+    }
+
+    if error_code in validation_errors:
+        return SyncLabsValidationError(default_message, code=error_code)
+    elif error_code in retryable_errors:
+        return SyncLabsRetryableError(default_message, code=error_code)
+    
+    # Default to base error for unhandled, auth, pipeline failures
+    return SyncLabsError(default_message, code=error_code)
+
+
 def _get_sync_client() -> AsyncSync:
     """Get configured Sync Labs client."""
     if not settings.sync_labs_api_key:
@@ -101,7 +153,23 @@ async def process_lip_sync(
     except ApiError as e:
         print(f"[SYNC_LABS] ❌ API Error: {e.status_code}")
         print(f"[SYNC_LABS] Error body: {e.body}")
-        raise Exception(f"Sync Labs API Error ({e.status_code}): {e.body}")
+        
+        # Try to extract error code/message from body
+        error_code = None
+        error_message = f"Sync Labs API Error ({e.status_code})"
+        
+        if isinstance(e.body, dict) and "error" in e.body:
+            error_data = e.body["error"]
+            if isinstance(error_data, dict):
+                error_code = error_data.get("code")
+                error_message = error_data.get("message", error_message)
+            else:
+                error_message = str(error_data)
+        elif isinstance(e.body, dict) and "code" in e.body:
+            error_code = e.body.get("code")
+            error_message = e.body.get("message", error_message)
+            
+        raise _parse_sync_error(error_code, error_message)
         
     except Exception as e:
         print(f"[SYNC_LABS] ❌ Error: {str(e)}")
@@ -223,8 +291,12 @@ async def wait_for_generation(generation_id: str, timeout_seconds: int = 600) ->
                     raise Exception(f"Generation completed but no URL available")
                     
             elif status == "FAILED" or status == "ERROR":
+                error_code = getattr(result, 'error_code', getattr(result, 'code', None))
                 error_msg = getattr(result, 'error', 'Unknown error')
-                raise Exception(f"Generation failed: {error_msg}")
+                if isinstance(error_msg, dict):
+                    error_code = error_msg.get('code', error_code)
+                    error_msg = error_msg.get('message', 'Unknown error')
+                raise _parse_sync_error(error_code, f"Generation failed: {error_msg}")
             
             # Still processing
             if elapsed > 60:

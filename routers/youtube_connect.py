@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 from typing import Optional
 import httpx
 import requests
-from firebase_admin import auth
 
 from config import settings
 from schemas.auth import YouTubeConnectionResponse, YouTubeConnectionListResponse, UpdateConnectionRequest

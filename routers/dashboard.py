@@ -7,7 +7,6 @@ import json
 from schemas.dashboard import DashboardResponse, YouTubeConnectionSummary, ProcessingJobSummary, ProjectSummary, CreditSummary, WeeklyStats, ActivityFeedItem
 from middleware.auth import get_current_user
 from services.supabase_db import supabase_service
-from firebase_admin import auth
 from datetime import timedelta
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
