@@ -52,6 +52,8 @@ It pulls the latest code.
 
 Secrets Injection: It dynamically creates the .env and service_account.json files on the server using GitHub Secrets.
 
+THIS ENV file is in github secrets as ENV_FILE
+
 It restarts the fastapi_app service.
 
 Managing Secrets (Production)
