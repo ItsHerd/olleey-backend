@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # YouTube API
     youtube_api_key: str
     
+    # Gemini API
+    gemini_api_key: Optional[str] = None
+    
     # Database
     database_url: str = "sqlite:///./youtube_dubbing.db"
     

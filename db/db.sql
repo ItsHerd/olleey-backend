@@ -107,6 +107,25 @@ CREATE TABLE public.localized_videos (
   CONSTRAINT localized_videos_dubbed_audio_id_fkey FOREIGN KEY (dubbed_audio_id) REFERENCES public.dubbed_audio(id),
   CONSTRAINT localized_videos_lip_sync_job_id_fkey FOREIGN KEY (lip_sync_job_id) REFERENCES public.lip_sync_jobs(id)
 );
+CREATE TABLE public.organization_members (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  organization_id uuid NOT NULL,
+  user_id text NOT NULL,
+  role USER-DEFINED DEFAULT 'member'::org_role,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT organization_members_pkey PRIMARY KEY (id),
+  CONSTRAINT fk_org_id FOREIGN KEY (organization_id) REFERENCES public.organizations(id),
+  CONSTRAINT fk_user_id FOREIGN KEY (user_id) REFERENCES public.users(user_id)
+);
+CREATE TABLE public.organizations (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  billing_email text,
+  stripe_customer_id text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT organizations_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.processing_jobs (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   job_id uuid DEFAULT gen_random_uuid() UNIQUE,
@@ -137,14 +156,16 @@ CREATE TABLE public.processing_jobs (
 );
 CREATE TABLE public.projects (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
-  user_id text NOT NULL,
+  created_by text NOT NULL,
   name text NOT NULL,
   description text,
   settings jsonb,
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now(),
   deleted_at timestamp with time zone,
-  CONSTRAINT projects_pkey PRIMARY KEY (id)
+  organization_id uuid NOT NULL,
+  CONSTRAINT projects_pkey PRIMARY KEY (id),
+  CONSTRAINT fk_projects_org FOREIGN KEY (organization_id) REFERENCES public.organizations(id)
 );
 CREATE TABLE public.subscriptions (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
