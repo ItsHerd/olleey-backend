@@ -496,7 +496,11 @@ async def list_videos(
             # Filter by type if requested
             if video_type != "all" and type_str != video_type:
                 continue
-            
+
+            # Skip videos already added from the database pass (deduplication)
+            if any(v.video_id == video_id for v in final_videos):
+                continue
+
             # Thumbnails
             thumbnails = snippet.get('thumbnails', {})
             thumb_url = thumbnails.get('high', {}).get('url') or thumbnails.get('default', {}).get('url', '')

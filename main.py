@@ -8,7 +8,7 @@ import asyncio
 import os
 
 from config import settings
-from routers import auth, videos, localization, webhooks, channels, jobs, youtube_connect, dashboard, settings as settings_router, events, projects, costs, agent
+from routers import auth, videos, localization, webhooks, channels, jobs, youtube_connect, dashboard, settings as settings_router, events, projects, costs, agent, batch
 from services.subscription_renewal import renewal_scheduler_loop, stop_scheduler_task
 
 
@@ -85,6 +85,7 @@ app.include_router(settings_router.router)
 app.include_router(events.router)
 app.include_router(costs.router)
 app.include_router(agent.router)
+app.include_router(batch.router)
 
 # Mount storage directory for serving processed videos
 storage_dir = getattr(settings, 'local_storage_dir', './storage')
